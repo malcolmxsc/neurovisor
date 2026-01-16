@@ -8,7 +8,7 @@ use hyper::{Method, Request, body::Bytes};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use hyperlocal::{UnixConnector, Uri};
-use http_body_util::Full; // <--- This is the new way to handle Bodies
+use http_body_util::Full;
 use serde_json::json;
 
 #[tokio::main]
@@ -25,7 +25,7 @@ async fn main() {
 
     println!("🚀 Launching Firecracker...");
     
-    // 2. Spawn Firecracker (With logs visible)
+    // 2. Spawn Firecracker
     let mut child = Command::new(firecracker_bin)
         .arg("--api-sock")
         .arg(socket_path)
@@ -48,28 +48,42 @@ async fn main() {
         panic!("Firecracker socket failed to appear!");
     }
 
-    // 4. Create the HTTP Client
-    // We use the 'legacy' client because it handles the connection pool logic for us
     let client = Client::builder(TokioExecutor::new()).build(UnixConnector);
 
+    // --- STEP 1: CONFIGURE BOOT SOURCE ---
     println!("⚙️  Configuring Boot Source (Kernel)...");
-    let uri: hyper::Uri = Uri::new(socket_path, "/boot-source").into();
+    let uri_boot: hyper::Uri = Uri::new(socket_path, "/boot-source").into();
     let boot_config = json!({
         "kernel_image_path": kernel_path,
-        "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"
+        "boot_args": "console=ttyS0 reboot=k panic=1 pci=off ip=172.16.0.2::172.16.0.1:255.255.255.0::eth0:off"
     });
-    
-    // FIX: Use Full::<Bytes>::new() instead of Body::from()
     let req = Request::builder()
         .method(Method::PUT)
-        .uri(uri)
+        .uri(uri_boot)
         .header("Content-Type", "application/json")
-        .body(Full::new(Bytes::from(boot_config.to_string()))) 
+        .body(Full::new(Bytes::from(boot_config.to_string())))
         .unwrap();
     client.request(req).await.expect("Failed to configure boot source");
 
+    // --- STEP 2: CONFIGURE NETWORK (Must be before Boot) ---
+    println!("🔌 Configuring Network Interface...");
+    let uri_net: hyper::Uri = Uri::new(socket_path, "/network-interfaces/eth0").into();
+    let net_config = json!({
+        "iface_id": "eth0",
+        "guest_mac": "AA:FC:00:00:00:01",
+        "host_dev_name": "tap0"
+    });
+    let req = Request::builder()
+        .method(Method::PUT)
+        .uri(uri_net)
+        .header("Content-Type", "application/json")
+        .body(Full::new(Bytes::from(net_config.to_string())))
+        .unwrap();
+    client.request(req).await.expect("Failed to configure network");
+
+    // --- STEP 3: ATTACH DRIVE ---
     println!("💾 Attaching Root Filesystem...");
-    let uri: hyper::Uri = Uri::new(socket_path, "/drives/rootfs").into();
+    let uri_drive: hyper::Uri = Uri::new(socket_path, "/drives/rootfs").into();
     let drive_config = json!({
         "drive_id": "rootfs",
         "path_on_host": rootfs_path,
@@ -78,20 +92,21 @@ async fn main() {
     });
     let req = Request::builder()
         .method(Method::PUT)
-        .uri(uri)
+        .uri(uri_drive)
         .header("Content-Type", "application/json")
         .body(Full::new(Bytes::from(drive_config.to_string())))
         .unwrap();
     client.request(req).await.expect("Failed to attach drive");
 
+    // --- STEP 4: START INSTANCE ---
     println!("🔥 BOOTING INSTANCE...");
-    let uri: hyper::Uri = Uri::new(socket_path, "/actions").into();
+    let uri_action: hyper::Uri = Uri::new(socket_path, "/actions").into();
     let action_config = json!({
         "action_type": "InstanceStart"
     });
     let req = Request::builder()
         .method(Method::PUT)
-        .uri(uri)
+        .uri(uri_action)
         .header("Content-Type", "application/json")
         .body(Full::new(Bytes::from(action_config.to_string())))
         .unwrap();
@@ -101,6 +116,5 @@ async fn main() {
     println!("       VM IS RUNNING (Press Ctrl+C to exit)       ");
     println!("--------------------------------------------------");
     
-    // Wait for the child process to exit
     let _ = child.wait();
 }
