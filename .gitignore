@@ -1,0 +1,5 @@
+/target
+firecracker
+vmlinux
+rootfs.ext4
+*.socket

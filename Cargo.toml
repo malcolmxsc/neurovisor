@@ -1,0 +1,18 @@
+[package]
+name = "neurovisor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# The Modern Hyper 1.0 Stack (Production Standard)
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] } # Needed for the Client Builder
+http-body-util = "0.1" # Needed to handle request/response bodies
+hyperlocal = "0.9" # The Unix Socket bridge (updated for Hyper 1.0)
