@@ -10,8 +10,6 @@ This architecture mimics the production infrastructure of modern AI labs, priori
 
 ## 🏗 Architecture
 
-
-
 NeuroVisor operates as an asynchronous control plane interacting directly with the KVM hypervisor.
 
 * **Host Logic (The Brain):** A Rust-based controller that manages VM lifecycles, creates TAP network interfaces, and acts as the **Inference Bridge** (forwarding prompts to local GPUs).
@@ -20,22 +18,27 @@ NeuroVisor operates as an asynchronous control plane interacting directly with t
 
 ## 🚀 Key Features
 
+## 🚀 Key Features
+
 ### ⚡ Core Virtualization
 * **Instant Boot:** Custom kernel configuration (`reboot=k`, stripped drivers) achieves sub-second boot times.
 * **Software Defined Networking:** Manual implementation of TAP interfaces and raw IP routing logic in Rust.
 * **Golden Image:** Immutable root filesystems pre-provisioned with AI runtimes (Python/NumPy) to eliminate installation latency.
 
+### 🌐 Distributed Orchestration (Planned)
+* **Custom Control Plane:** A centralized "Scheduler" service (Rust/Axum) that manages VM placement across multiple worker nodes.
+* **gRPC Communication:** High-performance, strongly-typed internal communication using `tonic` (Protobuf).
+* **Smart Scheduling:** Load-balancing algorithms (e.g., Least-Connections) to optimize resource usage across the cluster.
+
+### 📊 Deep Observability & Tracing (Planned)
+* **The "PLGT" Stack:** Full integration with **P**rometheus (Metrics), **L**oki (Logs), **G**rafana (Dashboards), and **T**empo (Traces).
+* **Distributed Tracing:** Implementation of `TraceID` propagation (OpenTelemetry) to correlate requests from the User -> Controller -> Worker Node -> Kernel -> Python Agent.
+* **eBPF Telemetry:** XDP probes to measure packet latency and OOM events at the kernel level.
+
 ### 🛡 Security & Isolation (Planned)
 * **Seccomp Hardening:** Custom BPF profiles to restrict the Firecracker process syscalls (e.g., blocking `fork` or `exec`).
-* **Network Isolation:** Strict IP forwarding rules and "Metadata Blocking" (preventing access to Cloud Metadata services).
-
-### 🔍 Observability (Planned)
-* **eBPF Tracing:** Integrated XDP probes using `aya-rs` to measure packet latency at the kernel level.
-* **OOM Detection:** Kernel tracepoints to identify memory pressure events before agent crashes.
-
-### ⚖️ Resource Management (Planned)
-* **I/O Scheduling:** Token-bucket rate limiting on the Vsock channel to prevent "Noisy Neighbor" agents from saturating the inference server.
-
+* **Network Isolation:** Strict "Metadata Blocking" rules to prevent SSRF attacks against cloud infrastructure.
+* **Resource Throttling:** Token-bucket rate limiting on the Vsock channel.
 ---
 
 ## 🛠 Systems Engineering Stack
@@ -45,7 +48,7 @@ This project is built to demonstrate expertise in **Low-Level Linux Systems Engi
 * **Languages:** Rust (Control Plane), Python (Agent), C (eBPF).
 * **Virtualization:** KVM, Firecracker, Virtio.
 * **Kernel:** Boot Args, Tap/Tun Networking, Seccomp, cgroups.
-* **Async Runtime:** Tokio, Hyper 1.0.
+* **Async Runtime:** Tokio, Hyper 1.0, Tonic (gRPC).
 
 ---
 
