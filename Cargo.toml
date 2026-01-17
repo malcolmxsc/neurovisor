@@ -7,12 +7,16 @@ edition = "2021"
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
 
+# HTTP Client (for Firecracker API)
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] }
+http-body-util = "0.1"
+hyperlocal = "0.9"
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# The Modern Hyper 1.0 Stack (Production Standard)
-hyper = { version = "1.0", features = ["full"] }
-hyper-util = { version = "0.1", features = ["client", "http1", "client-legacy"] } # Needed for the Client Builder
-http-body-util = "0.1" # Needed to handle request/response bodies
-hyperlocal = "0.9" # The Unix Socket bridge (updated for Hyper 1.0)
+# Systems Programming (Terminal & IO)
+nix = { version = "0.27", features = ["fs", "term"] }
+libc = "0.2"
