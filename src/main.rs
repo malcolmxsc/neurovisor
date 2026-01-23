@@ -1,129 +1,130 @@
-use std::process::{Command, Stdio};
-use std::{thread, time};
+use std::process::Stdio;
 use std::path::Path;
-use serde::Serialize;
-use tokio::net::UnixStream; 
+use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::time::{timeout, Duration};
+use futures_util::StreamExt;
 
-#[derive(Serialize)]
-struct SnapshotLoad { 
-    snapshot_path: String, 
-    mem_file_path: String, 
-    resume_vm: bool 
-}
+// Import our new modules
+use neurovisor::vm::{spawn_firecracker, wait_for_api_socket, FirecrackerClient, to_absolute_path};
+use neurovisor::ollama::OllamaClient;
 
-const FIRECRACKER_BIN: &str = "./firecracker";
+// In production, these would be loaded from a .env or config file
 const API_SOCKET: &str = "/tmp/firecracker.socket";
 const MEM_PATH: &str = "./mem_file";
 const VSOCK_PATH: &str = "./neurovisor.vsock";
 const SNAPSHOT_PATH: &str = "./snapshot_file";
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("📸 STARTING SNAPSHOT BUILDER...");
+    // Production Standard: Use structured logging
+    println!("[INFO] 📸 INITIALIZING NEUROVISOR ORCHESTRATOR...");
 
-    // 1. AGGRESSIVE CLEANUP (Fixes the "File Exists" bug)
+    // 1. CLEANUP
     let _ = std::fs::remove_file(API_SOCKET);
     let _ = std::fs::remove_file(VSOCK_PATH);
+
+    // 2. LAUNCH VMM
+    let mut child = spawn_firecracker(API_SOCKET, Stdio::inherit())?;
+
+    // 3. WAIT FOR API
+    wait_for_api_socket(API_SOCKET, None)?;
+
+    // 4. CREATE FIRECRACKER CLIENT
+    let fc_client = FirecrackerClient::new(API_SOCKET);
+
+    // 5. RESTORE STATE
+    let snap_abs = to_absolute_path(SNAPSHOT_PATH)?;
+    let mem_abs = to_absolute_path(MEM_PATH)?;
+
+    println!("[INFO] ⚡ RESTORING SNAPSHOT: {}", SNAPSHOT_PATH);
+    fc_client.load_snapshot(&snap_abs, &mem_abs, true).await?;
+
+    // 5. CONNECT TO AGENT WITH RETRY LOGIC
+    println!("[INFO] 📞 DIALING VSOCK AGENT...");
     
-    // 2. Launch Firecracker
-    let mut child = Command::new(FIRECRACKER_BIN).arg("--api-sock").arg(API_SOCKET)
-        .stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn()?;
-
-    // 3. Wait for API
-    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-        .build(hyperlocal::UnixConnector);
-    while !Path::new(API_SOCKET).exists() { thread::sleep(time::Duration::from_millis(100)); }
-
-
-    // 4. Configure VM new way for snapshot loading
-    let cwd = std::env::current_dir()?;
-    let snap_abs = cwd.join(SNAPSHOT_PATH).to_str().unwrap().to_string();
-    let mem_abs = cwd.join(MEM_PATH).to_str().unwrap().to_string();
-
-    println!("⚡ RESTORING VM STATE...");
-
-    // Send the snapshot command using the new struct
-    send_request(&client, "PUT", "/snapshot/load", SnapshotLoad {
-        snapshot_path: snap_abs,
-        mem_file_path: mem_abs,
-        resume_vm: true, // This tells the CPU to wake up immediately
-    }).await?;
-
-
-
-    // 5. CONNECT TO AGENT (The New Logic)
-    println!("📞 Dialing Agent...");
+    let execution_timeout = Duration::from_secs(5);
     
-    // Wait for the Vsock file to appear
-    while !Path::new(VSOCK_PATH).exists() { 
-        thread::sleep(time::Duration::from_millis(1)); 
-    }
+    let result = timeout(execution_timeout, async {
+        // PRODUCTION PATTERN: Retry connection up to 5 times
+        let mut stream = None;
+        for i in 0..5 {
+            if Path::new(VSOCK_PATH).exists() {
+                if let Ok(s) = UnixStream::connect(VSOCK_PATH).await {
+                    stream = Some(s);
+                    break;
+                }
+            }
+            println!("[DEBUG] Connection attempt {} failed, retrying...", i + 1);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
-    // Connect to the Python Agent
-    match UnixStream::connect(VSOCK_PATH).await {
-        Ok(mut stream) => {
-            println!("✅ Connected to Agent!");
+        let mut stream = stream.ok_or("Failed to connect after retries")?;
+        println!("[INFO] ✅ VSOCK TUNNEL ESTABLISHED");
 
-            // Handshake
-            stream.write_all(b"CONNECT 5000\n").await?;
+// --- NEW BLOCK (Corrected) ---
+        // 1. Handshake Draining (Internal Firecracker Handshake)
+        stream.write_all(b"CONNECT 6000\n").await?; 
+
+        // 2. Smart Accumulator: Read until we find the JSON object
+        let mut full_buffer = Vec::new();
+        let mut temp_buffer = [0; 1024];
+
+        // Keep reading from the stream until we see a closing brace '}'
+        loop {
+            let n = stream.read(&mut temp_buffer).await?;
+            if n == 0 { break; } // Connection closed
+            full_buffer.extend_from_slice(&temp_buffer[..n]);
+
+            // Heuristic: If we have an opening '{' and closing '}', we probably have the JSON
+            if full_buffer.contains(&b'{') && full_buffer.contains(&b'}') {
+                break;
+            }
+        }
+
+        // 3. Parse: Skip the "OK 1073741824" header and find the JSON
+        // FIX: corrected 'fuller_buffer' to 'full_buffer' and 'inter()' to 'iter()'
+        let json_start_index = full_buffer.iter().position(|&b| b == b'{')
+            .ok_or("Failed to find JSON start '{' in guest stream")?;
             
-            // Send Data
-            println!("📤 Sending Payload: 'Hello from the Future'");
-            stream.write_all(b"Hello from the Future").await?;
+        // FIX: corrected 'sserde_json' to 'serde_json'
+        let guest_req: serde_json::Value = serde_json::from_slice(&full_buffer[json_start_index..])?;
+        let prompt = guest_req["prompt"].as_str().unwrap_or("Hello");
 
-            // Read Response
-            let mut buffer = [0; 1024];
-            let n = stream.read(&mut buffer).await?;
-            let response = String::from_utf8_lossy(&buffer[..n]);
-            
+        println!("[BRIDGE] Forwarding to Ollama: {}", prompt);
+
+        // 4. Forward to Host Ollama API using our new client
+        let ollama = OllamaClient::new("http://localhost:11434");
+        let mut token_stream = ollama.generate_stream(prompt, "llama3.2").await?;
+
+        // 5. Stream Tokens back to the Guest via Vsock
+        let mut full_response = String::new();
+        while let Some(token_result) = token_stream.next().await {
+            match token_result {
+                Ok(token) => {
+                    if !token.is_empty() {
+                        stream.write_all(token.as_bytes()).await?;
+                        full_response.push_str(&token);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok::<String, Box<dyn std::error::Error + Send + Sync>>(full_response)
+    }).await;
+
+    // 6. TERMINATE & REPORT
+    match result {
+        Ok(Ok(response)) => {
             println!("--------------------------------------------------");
-            println!("📩 AGENT RESPONSE: {}", response);
+            println!("📩 AGENT RESPONSE:\n{}", response.trim());
             println!("--------------------------------------------------");
         }
-        Err(e) => {
-            println!("❌ Connection Failed: {}", e);
-        }
-    }
-    child.kill()?;
-    Ok(())
-}
-
-// Unified Request Handler with Error Checking
-async fn send_request<T: Serialize>(
-    client: &hyper_util::client::legacy::Client<hyperlocal::UnixConnector, http_body_util::Full<hyper::body::Bytes>>,
-    method: &str,
-    endpoint: &str, 
-    body: T
-) -> Result<(), Box<dyn std::error::Error>> {
-    let uri: hyper::Uri = hyperlocal::Uri::new(API_SOCKET, endpoint).into();
-    let json = serde_json::to_string(&body)?;
-    
-    let req_method = match method {
-        "PUT" => hyper::Method::PUT,
-        "PATCH" => hyper::Method::PATCH,
-        _ => hyper::Method::GET,
-    };
-
-    let req = hyper::Request::builder()
-        .method(req_method)
-        .uri(uri)
-        .header("Content-Type", "application/json")
-        .body(http_body_util::Full::new(hyper::body::Bytes::from(json)))?;
-
-    let res = client.request(req).await?;
-    let status = res.status();
-
-    if !status.is_success() {
-        // If Firecracker complains, we print the error and CRASH immediately
-        // This prevents "Silent Failures"
-        let body_bytes = http_body_util::BodyExt::collect(res.into_body()).await?.to_bytes();
-        let error_msg = String::from_utf8(body_bytes.to_vec())?;
-        
-        // Panic will print the error clearly to the console
-        panic!("\r\n❌ API ERROR on {}: {} - {}\r\n", endpoint, status, error_msg);
+        Ok(Err(e)) => println!("[ERROR] ❌ EXECUTION FAILED: {}", e),
+        Err(_) => println!("[WARN] ⚠️ TIMEOUT: VM unresponsive after 5s"),
     }
 
+    child.kill()?; // Ensure VM doesn't become a zombie
+    println!("[INFO] 🛑 ORCHESTRATOR EXIT CLEAN");
     Ok(())
 }
