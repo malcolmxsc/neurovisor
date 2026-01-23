@@ -18,8 +18,6 @@ NeuroVisor operates as an asynchronous control plane interacting directly with t
 
 ## 🚀 Key Features
 
-## 🚀 Key Features
-
 ### ⚡ Core Virtualization
 * **Instant Boot:** Custom kernel configuration (`reboot=k`, stripped drivers) achieves sub-second boot times.
 * **Software Defined Networking:** Manual implementation of TAP interfaces and raw IP routing logic in Rust.
