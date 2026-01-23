@@ -1,5 +1,36 @@
-/target
-firecracker
-vmlinux
-rootfs.ext4
-*.socket
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo lock for libraries (keep for binaries)
+# Cargo.lock is kept since this is a binary project
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Firecracker runtime files
+/firecracker
+/vmlinux
+/rootfs.ext4
+*.vsock
+snapshot_file
+mem_file
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Project-specific
+/release-v*/
+/.claude/
+/cargo
