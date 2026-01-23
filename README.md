@@ -13,7 +13,7 @@ This architecture mimics the production infrastructure of modern AI labs, priori
 NeuroVisor operates as an asynchronous control plane interacting directly with the KVM hypervisor.
 
 * **Host Logic (The Brain):** A Rust-based controller that manages VM lifecycles, creates TAP network interfaces, and acts as the **Inference Bridge** (forwarding prompts to local GPUs).
-* **Guest Logic (The Agent):** A minimal Alpine Linux kernel (<300ms boot) with a pre-warmed Python runtime.
+* **Guest Logic (The Agent):** A minimal ubuntu Linux kernel (<300ms boot) with a pre-warmed Python runtime.
 * **IPC Layer:** Zero-copy communication between Host and Guest using `virtio-vsock` (bypassing the TCP/IP stack overhead).
 
 ## 🚀 Key Features
