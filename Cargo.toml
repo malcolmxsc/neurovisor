@@ -45,6 +45,7 @@ tonic = "0.12"
 prost = "0.13"
 tower = "0.4"
 tokio-stream = "0.1"
+async-stream = "0.3"
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -1,6 +1,8 @@
 use std::env;
 use std::collections::HashMap;
-use tonic::transport::Channel;
+use tonic::transport::Endpoint;
+use tower::service_fn;
+use hyper_util::rt::tokio::TokioIo;
 use neurovisor::grpc::inference::inference_service_client::InferenceServiceClient;
 use neurovisor::grpc::inference::InferenceRequest;
 
@@ -8,9 +10,19 @@ use neurovisor::grpc::inference::InferenceRequest;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prompt = env::args().nth(1).unwrap_or_else(||"Hello what is AI?".to_string());
 
-    let channel = Channel::from_static("http://localhost:6000")
-    .connect()
-    .await?;
+    // Connect to host via vsock
+    // CID 2 is always the host from the guest's perspective
+    // Port 6000 is what the host is listening on
+    println!("[GUEST] Connecting to host via vsock...");
+    let channel = Endpoint::try_from("http://[::1]:6000")?
+        .connect_with_connector(service_fn(|_| async {
+            println!("[GUEST] Opening vsock connection to CID 2, port 6000...");
+            let stream = tokio_vsock::VsockStream::connect(2, 6000).await?;
+            Ok::<_, std::io::Error>(TokioIo::new(stream))
+        }))
+        .await?;
+
+    println!("[GUEST] ✓ Connected to host!");
 
     let mut client = InferenceServiceClient::new(channel);
 

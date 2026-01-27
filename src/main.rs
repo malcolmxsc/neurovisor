@@ -5,6 +5,7 @@ use neurovisor::vm::{spawn_firecracker, wait_for_api_socket, FirecrackerClient, 
 use neurovisor::ollama::OllamaClient;
 use neurovisor::grpc::server::InferenceServer;
 use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
+use neurovisor::grpc::VsockConnectedStream;
 
 // In production, these would be loaded from a .env or config file
 const API_SOCKET: &str = "/tmp/firecracker.socket";
@@ -54,15 +55,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ollama = OllamaClient::new("http://localhost:11434");
     let inference_server = InferenceServer::new(ollama);
     let service = InferenceServiceServer::new(inference_server);
-    // create Unix socket listener
-    let listener = tokio::net::UnixListener::bind(VSOCK_PATH)?;
+
+    // Listen on vsock CID 2 (host), port 6000
+    println!("[INFO] 🚀 STARTING GRPC SERVER ON VSOCK (CID 2, PORT 6000)...");
+    let mut listener = tokio_vsock::VsockListener::bind(2, 6000)?;
+
+    // Create a stream that wraps incoming connections
+    let vsock_stream = async_stream::stream! {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    yield Ok::<_, std::io::Error>(VsockConnectedStream(stream));
+                }
+                Err(e) => {
+                    eprintln!("[ERROR] Failed to accept vsock connection: {}", e);
+                }
+            }
+        }
+    };
 
     // build and serve
     tonic::transport::Server::builder()
     .add_service(service)
-    .serve_with_incoming(tokio_stream::wrappers::UnixListenerStream::new(listener))
+    .serve_with_incoming(vsock_stream)
     .await?;
-
 
     child.kill()?; // Ensure VM doesn't become a zombie
     println!("[INFO] 🛑 ORCHESTRATOR EXIT CLEAN");

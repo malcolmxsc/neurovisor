@@ -6,4 +6,6 @@
 //! - Protobuf message handling
 
 pub mod server;
+pub mod vsock;
 pub use server::inference;
+pub use vsock::VsockConnectedStream;
