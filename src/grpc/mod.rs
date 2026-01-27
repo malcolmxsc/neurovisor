@@ -6,3 +6,4 @@
 //! - Protobuf message handling
 
 pub mod server;
+pub use server::inference;
