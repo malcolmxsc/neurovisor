@@ -50,8 +50,6 @@ This project is built to demonstrate expertise in **Low-Level Linux Systems Engi
 
 ---
 
-## 📦 Getting Started
-
 ### Prerequisites
 * Linux Host (or WSL2 with KVM enabled)
 * Rust Toolchain (Cargo)
