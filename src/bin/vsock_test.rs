@@ -2,8 +2,6 @@
 //!
 //! This uses raw libc calls to diagnose if the issue is with tokio_vsock or vsock itself.
 
-use std::io::{Read, Write};
-use std::os::unix::io::FromRawFd;
 
 fn main() {
     println!("[VSOCK_TEST] Starting minimal vsock test...");

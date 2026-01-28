@@ -18,17 +18,44 @@
 Thumbs.db
 
 # Firecracker runtime files
-/firecracker
-/vmlinux
-/rootfs.ext4
 *.vsock
+*.vsock_*
 snapshot_file
 mem_file
 
-# Python
+# VM images and kernels (large binaries, built locally)
+/vmlinux
+/vmlinuz
+*.bzImage.bak
+/rootfs.ext4
+/rootfs.ext4.backup
+/rootfs_new/
+/initramfs
+/linux-kernel.deb
+
+# Linux kernel source (built locally)
+/linux-6.6.14/
+/linux-6.6.14.tar.xz
+
+# Python (legacy agent scripts)
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Legacy scripts and files
+/clean_run.sh
+/sync_agent.sh
+/new_agent.py
+/smart_agent.py
+/vm-setup/
+
+# Project docs (local only)
+/HANDOFF.md
+/PROJECT_OUTLINE.md
+
+# Generated gRPC code (rebuild with `cargo build`)
+/src/grpc/neurovisor.inference.rs
+/src/inference.proto
 
 # Project-specific
 /release-v*/
