@@ -5,14 +5,13 @@ use neurovisor::vm::{spawn_firecracker, wait_for_api_socket, FirecrackerClient, 
 use neurovisor::ollama::OllamaClient;
 use neurovisor::grpc::server::InferenceServer;
 use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
-use neurovisor::grpc::VsockConnectedStream;
 
 // In production, these would be loaded from a .env or config file
 const API_SOCKET: &str = "/tmp/firecracker.socket";
 const KERNEL_PATH: &str = "./vmlinuz";
-const INITRAMFS_PATH: &str = "./initramfs";
 const ROOTFS_PATH: &str = "./rootfs.ext4";
 const VSOCK_PATH: &str = "./neurovisor.vsock";
+const VSOCK_PORT: u32 = 6000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,11 +33,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 5. CONFIGURE VM: KERNEL, ROOTFS, AND VSOCK
     let kernel_abs = to_absolute_path(KERNEL_PATH)?;
-    let initramfs_abs = to_absolute_path(INITRAMFS_PATH)?;
     let rootfs_abs = to_absolute_path(ROOTFS_PATH)?;
 
     println!("[INFO] 🔧 CONFIGURING VM BOOT...");
-    fc_client.boot_source(&kernel_abs, &initramfs_abs).await?;
+    fc_client.boot_source(
+        &kernel_abs,
+        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/bin/run_guest.sh",
+    ).await?;
 
     println!("[INFO] 💾 ADDING ROOT DRIVE: {}", ROOTFS_PATH);
     fc_client.add_drive("root", &rootfs_abs, true, false).await?;
@@ -46,41 +47,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[INFO] 🔌 CONFIGURING VSOCK");
     fc_client.configure_vsock(3, VSOCK_PATH).await?;
 
-    println!("[INFO] ⚡ STARTING VM");
-    fc_client.start().await?;
-
-    println!("[INFO] ⏳ WAITING FOR VM TO BOOT...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
+    // Set up gRPC server BEFORE starting VM (guest will connect immediately after boot)
     let ollama = OllamaClient::new("http://localhost:11434");
     let inference_server = InferenceServer::new(ollama);
     let service = InferenceServiceServer::new(inference_server);
 
-    // Listen on vsock CID 2 (host), port 6000
-    println!("[INFO] 🚀 STARTING GRPC SERVER ON VSOCK (CID 2, PORT 6000)...");
-    let mut listener = tokio_vsock::VsockListener::bind(2, 6000)?;
+    // Firecracker convention: guest connects to CID 2 port P -> host socket at {uds_path}_{P}
+    let vsock_listener_path = format!("{}_{}", VSOCK_PATH, VSOCK_PORT);
+    println!("[INFO] 🚀 STARTING GRPC SERVER ON {} ...", vsock_listener_path);
 
-    // Create a stream that wraps incoming connections
-    let vsock_stream = async_stream::stream! {
-        loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    yield Ok::<_, std::io::Error>(VsockConnectedStream(stream));
-                }
-                Err(e) => {
-                    eprintln!("[ERROR] Failed to accept vsock connection: {}", e);
-                }
-            }
-        }
-    };
+    // Remove any existing socket file
+    let _ = std::fs::remove_file(&vsock_listener_path);
 
-    // build and serve
-    tonic::transport::Server::builder()
-    .add_service(service)
-    .serve_with_incoming(vsock_stream)
-    .await?;
+    let listener = tokio::net::UnixListener::bind(&vsock_listener_path)?;
 
-    child.kill()?; // Ensure VM doesn't become a zombie
+    // Spawn gRPC server in background task
+    let grpc_handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(service)
+            .serve_with_incoming(tokio_stream::wrappers::UnixListenerStream::new(listener))
+            .await
+    });
+
+    // NOW start the VM (gRPC server is already listening)
+    println!("[INFO] ⚡ STARTING VM");
+    fc_client.start().await?;
+
+    println!("[INFO] ⏳ WAITING FOR VM TO COMPLETE...");
+
+    // Wait for Firecracker process to exit (VM will poweroff after guest_client completes)
+    let status = child.wait()?;
+    println!("[INFO] 🛑 VM EXITED WITH STATUS: {:?}", status);
+
+    // Abort the gRPC server task (it would block forever otherwise)
+    grpc_handle.abort();
     println!("[INFO] 🛑 ORCHESTRATOR EXIT CLEAN");
     Ok(())
 }

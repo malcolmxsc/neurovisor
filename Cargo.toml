@@ -19,11 +19,15 @@ path = "src/bin/builder.rs"
 name = "guest_client"
 path = "src/bin/guest_client.rs"
 
+[[bin]]
+name = "vsock_test"
+path = "src/bin/vsock_test.rs"
+
 [dependencies]
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
 tokio-vsock = "0.3"
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls"] }
 futures-util = "0.3"
 
 # HTTP Client (for Firecracker API)
