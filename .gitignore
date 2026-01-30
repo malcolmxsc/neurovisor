@@ -18,6 +18,7 @@
 Thumbs.db
 
 # Firecracker runtime files
+/firecracker
 *.vsock
 *.vsock_*
 snapshot_file
