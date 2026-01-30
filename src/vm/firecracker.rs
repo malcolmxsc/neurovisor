@@ -155,6 +155,18 @@ impl FirecrackerClient {
         .await
     }
 
+    /// Resume a paused VM
+    pub async fn resume(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.send_request(
+            "PATCH",
+            "/vm",
+            VmState {
+                state: "Resumed".to_string(),
+            },
+        )
+        .await
+    }
+
     /// Create a full snapshot of the VM
     pub async fn create_snapshot(
         &self,

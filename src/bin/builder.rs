@@ -1,7 +1,8 @@
 //! Snapshot builder for Neurovisor VMs
 //!
-//! Boots a Firecracker VM with a shell init, waits for it to stabilize,
-//! then pauses and captures a full snapshot for fast restore.
+//! Boots a Firecracker VM with the guest init script, waits for kernel init
+//! to complete, then pauses and captures a snapshot. On restore, the VM
+//! resumes right before guest_client runs.
 
 use std::process::Stdio;
 use tokio::time::Duration;
@@ -30,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Wait for API
     wait_for_api_socket(API_SOCKET, Some(Duration::from_secs(5)))?;
 
-    // 4. Configure VM
+    // 4. Configure VM with same settings as main.rs (important for snapshot compatibility)
     let fc = FirecrackerClient::new(API_SOCKET);
 
     let kernel_abs = to_absolute_path(KERNEL_PATH)?;
@@ -39,19 +40,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[INFO] Configuring VM resources...");
     fc.boot_source(
         &kernel_abs,
-        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/bin/sh",
+        // Use snapshot_init.sh which sets up the system then sleeps (ready for snapshot)
+        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/bin/snapshot_init.sh",
     )
     .await?;
 
     fc.add_drive("root", &rootfs_abs, true, false).await?;
     fc.configure_vsock(3, VSOCK_PATH).await?;
 
-    // 5. Boot and let it stabilize
+    // 5. Boot and wait for init to complete setup
     println!("[INFO] Booting VM...");
     fc.start().await?;
 
-    println!("[INFO] Waiting 5s for VM to stabilize...");
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    println!("[INFO] Waiting 3s for init to complete setup...");
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     // 6. Pause and snapshot
     println!("[INFO] Pausing VM...");
@@ -63,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fc.create_snapshot(&snap_abs, &mem_abs).await?;
 
     println!("[INFO] Snapshot complete: {} + {}", SNAPSHOT_PATH, MEM_PATH);
+    println!("[INFO] To use: cargo run -- --snapshot");
 
     // 7. Cleanup
     child.kill()?;
