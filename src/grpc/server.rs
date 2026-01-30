@@ -1,7 +1,7 @@
 use tonic::{Request,Response,Status};
 use tokio_stream::wrappers::ReceiverStream;
 use futures_util::StreamExt;
-use crate::ollama::OllamaClient;
+use crate::ollama::{OllamaClient, StreamChunk};
 
 // Include the generated proto code
 
@@ -32,8 +32,6 @@ impl InferenceService for InferenceServer {
         &self,
         request: Request<InferenceRequest>,
     ) -> Result<Response<Self::InferStreamStream>, Status> {
-        //TODO implement this method
-
         let req = request.into_inner();
         
 
@@ -51,9 +49,16 @@ impl InferenceService for InferenceServer {
         let model_clone = model.clone();
         tokio::spawn(async move {
             let mut index = 0;
-            while let Some(token_result) = token_stream.next().await {
-                match token_result {
-                    Ok(token) => {
+
+            // Process each chunk from the Ollama stream
+            // Using pattern matching to handle the different StreamChunk variants
+            while let Some(chunk_result) = token_stream.next().await {
+                match chunk_result {
+                    // Pattern: Ok(StreamChunk::Token(token))
+                    // This destructures the Result AND the enum in one match arm
+                    // - Ok(...) means the Result was successful
+                    // - StreamChunk::Token(token) extracts the String from the Token variant
+                    Ok(StreamChunk::Token(token)) => {
                         if !token.is_empty() {
                             let chunk = TokenChunk {
                                 token,
@@ -62,11 +67,41 @@ impl InferenceService for InferenceServer {
                                 metadata: None,
                             };
                             if tx.send(Ok(chunk)).await.is_err() {
+                                // Receiver dropped, stop streaming
                                 break;
                             }
                             index += 1;
                         }
                     }
+
+                    // Pattern: Ok(StreamChunk::Done(metadata))
+                    // This is the final message from Ollama with timing/count data
+                    // - metadata is a GenerateResponse struct with eval_count, eval_duration_ns, etc.
+                    Ok(StreamChunk::Done(metadata)) => {
+                        // Convert nanoseconds to milliseconds for the API response
+                        let latency_ms = (metadata.eval_duration_ns as f64) / 1_000_000.0;
+
+                        let final_chunk = TokenChunk {
+                            token: String::new(),
+                            is_final: true,
+                            token_index: index,
+                            metadata: Some(InferenceMetadata {
+                                // Use actual token count from Ollama instead of our index
+                                total_tokens: metadata.eval_count as i32,
+                                // Use actual latency instead of hardcoded 0.0
+                                total_latency_ms: latency_ms,
+                                model: model_clone,
+                                // TODO: implement trace ID propagation
+                                trace_id: String::new(),
+                            }),
+                        };
+                        let _ = tx.send(Ok(final_chunk)).await;
+                        // Stream complete, exit the loop
+                        return;
+                    }
+
+                    // Pattern: Err(e)
+                    // Something went wrong parsing or receiving the stream
                     Err(e) => {
                         let _ = tx.send(Err(Status::internal(e.to_string()))).await;
                         return;
@@ -74,13 +109,15 @@ impl InferenceService for InferenceServer {
                 }
             }
 
+            // Fallback: if the stream ended without a Done chunk (shouldn't happen normally)
+            // This handles edge cases where the stream closes unexpectedly
             let final_chunk = TokenChunk {
                 token: String::new(),
                 is_final: true,
                 token_index: index,
                 metadata: Some(InferenceMetadata {
                     total_tokens: index,
-                    total_latency_ms: 0.0,
+                    total_latency_ms: 0.0,  // No metadata available
                     model: model_clone,
                     trace_id: String::new(),
                 }),

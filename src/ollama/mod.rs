@@ -5,4 +5,7 @@
 
 pub mod client;
 
-pub use client::{OllamaClient, GenerateResponse};
+// Re-export public types from the client module
+// This lets other modules do `use crate::ollama::StreamChunk` instead of
+// `use crate::ollama::client::StreamChunk`
+pub use client::{OllamaClient, GenerateResponse, StreamChunk};
