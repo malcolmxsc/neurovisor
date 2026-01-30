@@ -95,9 +95,6 @@ impl InferenceService for InferenceServer {
         &self,
         request: Request<InferenceRequest>,
      ) -> Result<Response<InferenceResponse>, Status> {
-    
-
-        // call olama client
         let req = request.into_inner();
         let prompt = req.prompt;
         let model = if req.model.is_empty() {
@@ -106,18 +103,17 @@ impl InferenceService for InferenceServer {
             req.model
         };
 
-        let result = self.ollama.generate(&prompt,&model).await
-        .map_err(|e| Status::internal(e.to_string()))?;
+        let result = self.ollama.generate(&prompt, &model).await
+            .map_err(|e| Status::internal(e.to_string()))?;
 
-       
-        // return the response
+        // Convert nanoseconds to milliseconds
+        let latency_ms = (result.eval_duration_ns as f64) / 1_000_000.0;
 
         Ok(Response::new(InferenceResponse {
-            response: result,
-            tokens_generated: 0,
-            latency_ms: 0.0,
-            model_used: model.to_string(),
-
+            response: result.response,
+            tokens_generated: result.eval_count as i32,
+            latency_ms,
+            model_used: model,
         }))
         
         

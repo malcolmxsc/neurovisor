@@ -3,6 +3,19 @@
 use futures_util::stream::{Stream, StreamExt};
 use std::pin::Pin;
 
+/// Response from Ollama's generate endpoint with metadata
+#[derive(Debug, Clone)]
+pub struct GenerateResponse {
+    /// The generated text
+    pub response: String,
+    /// Number of tokens generated
+    pub eval_count: u32,
+    /// Number of tokens in the prompt
+    pub prompt_eval_count: u32,
+    /// Time spent generating tokens (nanoseconds)
+    pub eval_duration_ns: u64,
+}
+
 /// Client for interacting with Ollama's HTTP API
 #[derive(Clone)]
 pub struct OllamaClient {
@@ -87,22 +100,55 @@ impl OllamaClient {
     /// * `model` - The model name (e.g., "llama3.2")
     ///
     /// # Returns
-    /// The complete generated text
+    /// GenerateResponse with the text and token/timing metadata
     pub async fn generate(
         &self,
         prompt: impl Into<String>,
         model: impl Into<String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = self.generate_stream(prompt, model).await?;
-        let mut full_response = String::new();
+    ) -> Result<GenerateResponse, Box<dyn std::error::Error + Send + Sync>> {
+        let endpoint = format!("{}/api/generate", self.base_url);
+        let prompt = prompt.into();
+        let model = model.into();
 
-        while let Some(token_result) = stream.next().await {
-            match token_result {
-                Ok(token) => full_response.push_str(&token),
-                Err(e) => return Err(e),
+        let mut bytes_stream = self
+            .client
+            .post(&endpoint)
+            .json(&serde_json::json!({
+                "model": model,
+                "prompt": prompt,
+                "stream": true
+            }))
+            .send()
+            .await?
+            .bytes_stream();
+
+        let mut full_response = String::new();
+        let mut eval_count = 0u32;
+        let mut prompt_eval_count = 0u32;
+        let mut eval_duration_ns = 0u64;
+
+        while let Some(chunk_result) = bytes_stream.next().await {
+            let bytes = chunk_result?;
+            if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                // Accumulate response tokens
+                if let Some(token) = data["response"].as_str() {
+                    full_response.push_str(token);
+                }
+
+                // Check if this is the final chunk with metadata
+                if data["done"].as_bool() == Some(true) {
+                    eval_count = data["eval_count"].as_u64().unwrap_or(0) as u32;
+                    prompt_eval_count = data["prompt_eval_count"].as_u64().unwrap_or(0) as u32;
+                    eval_duration_ns = data["eval_duration"].as_u64().unwrap_or(0);
+                }
             }
         }
 
-        Ok(full_response)
+        Ok(GenerateResponse {
+            response: full_response,
+            eval_count,
+            prompt_eval_count,
+            eval_duration_ns,
+        })
     }
 }
