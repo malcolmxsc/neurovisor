@@ -40,6 +40,10 @@ path = "examples/streaming_latency.rs"
 name = "trace_id_demo"
 path = "examples/trace_id_demo.rs"
 
+[[example]]
+name = "metrics_demo"
+path = "examples/metrics_demo.rs"
+
 [dependencies]
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -69,6 +73,8 @@ async-stream = "0.3"
 
 # Tracing & Observability
 uuid = { version = "1", features = ["v7"] }  # v7 = timestamp + random (time-sortable)
+prometheus = "0.13"                           # Metrics collection
+lazy_static = "1.4"                           # Global metric registry
 
 [build-dependencies]
 tonic-build = "0.12"
