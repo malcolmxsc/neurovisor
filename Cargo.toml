@@ -45,18 +45,6 @@ name = "metrics_demo"
 path = "examples/metrics_demo.rs"
 
 [[example]]
-name = "seccomp_demo"
-path = "examples/seccomp_demo.rs"
-
-[[example]]
-name = "capabilities_demo"
-path = "examples/capabilities_demo.rs"
-
-[[example]]
-name = "rate_limit_demo"
-path = "examples/rate_limit_demo.rs"
-
-[[example]]
 name = "seccomp_proof"
 path = "examples/seccomp_proof.rs"
 

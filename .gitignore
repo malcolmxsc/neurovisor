@@ -62,3 +62,6 @@ __pycache__/
 /release-v*/
 /.claude/
 /cargo
+
+# Demo examples (keep proof files, ignore educational demos)
+examples/*_demo.rs
