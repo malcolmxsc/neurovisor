@@ -23,6 +23,23 @@ path = "src/bin/guest_client.rs"
 name = "vsock_test"
 path = "src/bin/vsock_test.rs"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Examples - Showcase demos for portfolio/blog
+# Run with: cargo run --example <name>
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[example]]
+name = "cgroups_demo"
+path = "examples/cgroups_demo.rs"
+
+[[example]]
+name = "streaming_latency"
+path = "examples/streaming_latency.rs"
+
+[[example]]
+name = "trace_id_demo"
+path = "examples/trace_id_demo.rs"
+
 [dependencies]
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -49,6 +66,9 @@ prost = "0.13"
 tower = "0.4"
 tokio-stream = "0.1"
 async-stream = "0.3"
+
+# Tracing & Observability
+uuid = { version = "1", features = ["v7"] }  # v7 = timestamp + random (time-sortable)
 
 [build-dependencies]
 tonic-build = "0.12"

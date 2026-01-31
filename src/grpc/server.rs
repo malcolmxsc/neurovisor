@@ -1,6 +1,7 @@
 use tonic::{Request,Response,Status};
 use tokio_stream::wrappers::ReceiverStream;
 use futures_util::StreamExt;
+use uuid::Uuid;
 use crate::ollama::{OllamaClient, StreamChunk};
 
 // Include the generated proto code
@@ -41,13 +42,21 @@ impl InferenceService for InferenceServer {
         } else {
             req.model
         };
+
+        // Generate a unique trace ID for this request
+        // This allows tracking the request across services (host → VM → Ollama → back)
+        let trace_id = Uuid::now_v7().to_string();
+
         let mut token_stream = self.ollama.generate_stream(&prompt,&model).await
             .map_err(|e| Status::internal(e.to_string()))?;
-        // sender and receiver 
+        // sender and receiver
         let (tx,rx) = tokio::sync::mpsc::channel(100);
 
         let model_clone = model.clone();
+        let trace_id_clone = trace_id;
         tokio::spawn(async move {
+            // Move trace_id into the async block for use in metadata
+            let trace_id = trace_id_clone;
             let mut index = 0;
 
             // Process each chunk from the Ollama stream
@@ -91,8 +100,8 @@ impl InferenceService for InferenceServer {
                                 // Use actual latency instead of hardcoded 0.0
                                 total_latency_ms: latency_ms,
                                 model: model_clone,
-                                // TODO: implement trace ID propagation
-                                trace_id: String::new(),
+                                // Trace ID for distributed tracing across services
+                                trace_id: trace_id.clone(),
                             }),
                         };
                         let _ = tx.send(Ok(final_chunk)).await;
@@ -119,7 +128,7 @@ impl InferenceService for InferenceServer {
                     total_tokens: index,
                     total_latency_ms: 0.0,  // No metadata available
                     model: model_clone,
-                    trace_id: String::new(),
+                    trace_id,  // Still include trace ID even in fallback
                 }),
             };
             let _ = tx.send(Ok(final_chunk)).await;
@@ -140,6 +149,9 @@ impl InferenceService for InferenceServer {
             req.model
         };
 
+        // Generate trace ID for this request
+        let trace_id = Uuid::now_v7().to_string();
+
         let result = self.ollama.generate(&prompt, &model).await
             .map_err(|e| Status::internal(e.to_string()))?;
 
@@ -151,6 +163,7 @@ impl InferenceService for InferenceServer {
             tokens_generated: result.eval_count as i32,
             latency_ms,
             model_used: model,
+            trace_id,
         }))
         
         

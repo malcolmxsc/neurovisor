@@ -41,4 +41,5 @@ message InferenceResponse {
     int32 tokens_generated = 2;
     double latency_ms = 3;
     string model_used = 4;
+    string trace_id = 5;  // Unique ID for distributed tracing
 }
