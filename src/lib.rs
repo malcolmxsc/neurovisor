@@ -10,9 +10,11 @@
 //! - `grpc` - gRPC server for host-guest communication
 //! - `cgroups` - Resource isolation using Linux cgroups v2
 //! - `metrics` - Prometheus metrics for observability
+//! - `security` - Seccomp filters and capability dropping
 
 pub mod vm;
 pub mod ollama;
 pub mod grpc;
 pub mod cgroups;
 pub mod metrics;
+pub mod security;

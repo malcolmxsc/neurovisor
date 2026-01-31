@@ -44,6 +44,30 @@ path = "examples/trace_id_demo.rs"
 name = "metrics_demo"
 path = "examples/metrics_demo.rs"
 
+[[example]]
+name = "seccomp_demo"
+path = "examples/seccomp_demo.rs"
+
+[[example]]
+name = "capabilities_demo"
+path = "examples/capabilities_demo.rs"
+
+[[example]]
+name = "rate_limit_demo"
+path = "examples/rate_limit_demo.rs"
+
+[[example]]
+name = "seccomp_proof"
+path = "examples/seccomp_proof.rs"
+
+[[example]]
+name = "capabilities_proof"
+path = "examples/capabilities_proof.rs"
+
+[[example]]
+name = "rate_limit_proof"
+path = "examples/rate_limit_proof.rs"
+
 [dependencies]
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -75,6 +99,10 @@ async-stream = "0.3"
 uuid = { version = "1", features = ["v7"] }  # v7 = timestamp + random (time-sortable)
 prometheus = "0.13"                           # Metrics collection
 lazy_static = "1.4"                           # Global metric registry
+
+# Security & Sandboxing
+seccompiler = "0.4"                           # Seccomp BPF filter (same as Firecracker uses)
+caps = "0.5"                                  # Linux capabilities (drop/raise)
 
 [build-dependencies]
 tonic-build = "0.12"
