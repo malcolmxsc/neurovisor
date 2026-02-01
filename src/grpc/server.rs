@@ -56,7 +56,7 @@ impl InferenceService for InferenceServer {
         // Generate a unique trace ID for this request
         let trace_id = Uuid::now_v7().to_string();
 
-        let mut token_stream = match self.ollama.generate_stream(&prompt, &model).await {
+        let mut token_stream = match self.ollama.generate_stream(&prompt, &model, Some(&trace_id)).await {
             Ok(s) => s,
             Err(e) => {
                 ERRORS_TOTAL.with_label_values(&["ollama_error"]).inc();
@@ -172,7 +172,7 @@ impl InferenceService for InferenceServer {
         // Generate trace ID for this request
         let trace_id = Uuid::now_v7().to_string();
 
-        let result = match self.ollama.generate(&prompt, &model).await {
+        let result = match self.ollama.generate(&prompt, &model, Some(&trace_id)).await {
             Ok(r) => r,
             Err(e) => {
                 // Record error and clean up in-flight counter

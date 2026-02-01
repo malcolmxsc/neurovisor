@@ -56,6 +56,7 @@ impl OllamaClient {
     /// # Arguments
     /// * `prompt` - The input prompt for the LLM
     /// * `model` - The model name (e.g., "llama3.2")
+    /// * `trace_id` - Optional trace ID for request correlation
     ///
     /// # Returns
     /// A stream of `StreamChunk` items - either `Token(String)` for each
@@ -71,6 +72,7 @@ impl OllamaClient {
         &self,
         prompt: impl Into<String>,
         model: impl Into<String>,
+        trace_id: Option<&str>,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<StreamChunk, Box<dyn std::error::Error + Send + Sync>>> + Send>>,
         Box<dyn std::error::Error + Send + Sync>,
@@ -79,18 +81,21 @@ impl OllamaClient {
         let prompt = prompt.into();
         let model = model.into();
 
-        // Send the request to Ollama
-        let bytes_stream = self
+        // Build request with optional trace ID header
+        let mut request = self
             .client
             .post(&endpoint)
             .json(&serde_json::json!({
                 "model": model,
                 "prompt": prompt,
                 "stream": true
-            }))
-            .send()
-            .await?
-            .bytes_stream();
+            }));
+
+        if let Some(tid) = trace_id {
+            request = request.header("X-Trace-Id", tid);
+        }
+
+        let bytes_stream = request.send().await?.bytes_stream();
 
         // Transform the byte stream into a StreamChunk stream
         //
@@ -136,6 +141,7 @@ impl OllamaClient {
     /// # Arguments
     /// * `prompt` - The input prompt for the LLM
     /// * `model` - The model name (e.g., "llama3.2")
+    /// * `trace_id` - Optional trace ID for request correlation
     ///
     /// # Returns
     /// GenerateResponse with the text and token/timing metadata
@@ -143,22 +149,27 @@ impl OllamaClient {
         &self,
         prompt: impl Into<String>,
         model: impl Into<String>,
+        trace_id: Option<&str>,
     ) -> Result<GenerateResponse, Box<dyn std::error::Error + Send + Sync>> {
         let endpoint = format!("{}/api/generate", self.base_url);
         let prompt = prompt.into();
         let model = model.into();
 
-        let mut bytes_stream = self
+        // Build request with optional trace ID header
+        let mut request = self
             .client
             .post(&endpoint)
             .json(&serde_json::json!({
                 "model": model,
                 "prompt": prompt,
                 "stream": true
-            }))
-            .send()
-            .await?
-            .bytes_stream();
+            }));
+
+        if let Some(tid) = trace_id {
+            request = request.header("X-Trace-Id", tid);
+        }
+
+        let mut bytes_stream = request.send().await?.bytes_stream();
 
         let mut full_response = String::new();
         let mut eval_count = 0u32;
