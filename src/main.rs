@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = std::fs::remove_file(API_SOCKET);
     let _ = std::fs::remove_file(VSOCK_PATH);
 
-    // 2. LAUNCH VMM
+    // 2. LAUNCH VMM (seccomp filter applied via pre_exec in child process)
     let mut child = spawn_firecracker(API_SOCKET, Stdio::inherit())?;
     let firecracker_pid = child.id();
 
