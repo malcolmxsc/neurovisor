@@ -1,8 +1,10 @@
+use std::sync::Arc;
 use tonic::{Request,Response,Status};
 use tokio_stream::wrappers::ReceiverStream;
 use futures_util::StreamExt;
 use uuid::Uuid;
 use crate::ollama::{OllamaClient, StreamChunk};
+use crate::security::RateLimiter;
 use crate::metrics::{
     REQUESTS_TOTAL, INFERENCE_DURATION, TOKENS_GENERATED_TOTAL,
     ERRORS_TOTAL, REQUESTS_IN_FLIGHT, REQUEST_SIZE_BYTES, GRPC_REQUEST_DURATION,
@@ -20,11 +22,12 @@ use inference::{InferenceRequest, InferenceResponse,TokenChunk,InferenceMetadata
 
 pub struct InferenceServer {
     ollama: OllamaClient,
+    rate_limiter: Arc<RateLimiter>,
 }
 
 impl InferenceServer {
-    pub fn new(ollama: OllamaClient) -> Self {
-        Self {ollama}
+    pub fn new(ollama: OllamaClient, rate_limiter: Arc<RateLimiter>) -> Self {
+        Self { ollama, rate_limiter }
     }
 }
 
@@ -37,6 +40,12 @@ impl InferenceService for InferenceServer {
         &self,
         request: Request<InferenceRequest>,
     ) -> Result<Response<Self::InferStreamStream>, Status> {
+        // Check rate limit before processing
+        if !self.rate_limiter.try_acquire() {
+            ERRORS_TOTAL.with_label_values(&["rate_limited"]).inc();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
+
         // Start timing for gRPC duration
         let start = std::time::Instant::now();
 
@@ -153,6 +162,12 @@ impl InferenceService for InferenceServer {
         &self,
         request: Request<InferenceRequest>,
      ) -> Result<Response<InferenceResponse>, Status> {
+        // Check rate limit before processing
+        if !self.rate_limiter.try_acquire() {
+            ERRORS_TOTAL.with_label_values(&["rate_limited"]).inc();
+            return Err(Status::resource_exhausted("Rate limit exceeded"));
+        }
+
         // Start timing for gRPC duration
         let start = std::time::Instant::now();
 

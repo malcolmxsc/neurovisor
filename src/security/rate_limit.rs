@@ -315,4 +315,23 @@ mod tests {
         limiter.try_acquire();
         assert_eq!(limiter.available_tokens(), 4);
     }
+
+    #[test]
+    fn test_production_config_100_burst() {
+        // Test the production config: 100 burst, 50/sec
+        let limiter = RateLimiter::new(100, 50.0);
+
+        // First 100 requests should all succeed
+        for i in 0..100 {
+            assert!(limiter.try_acquire(), "Request {} should succeed", i);
+        }
+
+        // 101st request should be rate limited
+        assert!(!limiter.try_acquire(), "Request 101 should be rate limited");
+        assert!(!limiter.try_acquire(), "Request 102 should be rate limited");
+
+        // Verify we're at 0 tokens
+        assert_eq!(limiter.available_tokens(), 0);
+        assert!(limiter.is_rate_limited());
+    }
 }

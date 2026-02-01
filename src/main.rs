@@ -16,6 +16,7 @@ use neurovisor::ollama::OllamaClient;
 use neurovisor::grpc::server::InferenceServer;
 use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
 use neurovisor::cgroups::{CgroupManager, ResourceLimits};
+use neurovisor::security::RateLimiter;
 use neurovisor::metrics::{encode_metrics, CGROUP_MEMORY_USAGE, CGROUP_CPU_THROTTLED};
 
 const API_SOCKET: &str = "/tmp/firecracker.socket";
@@ -72,7 +73,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Set up gRPC server BEFORE starting/resuming VM
     let ollama = OllamaClient::new("http://localhost:11434");
-    let inference_server = InferenceServer::new(ollama);
+    let rate_limiter = Arc::new(RateLimiter::new(100, 50.0));
+    println!("[INFO] ✅ RATE LIMITER INITIALIZED (capacity: 100, rate: 50 req/sec)");
+    let inference_server = InferenceServer::new(ollama, rate_limiter);
     let service = InferenceServiceServer::new(inference_server);
 
     let vsock_listener_path = format!("{}_{}", VSOCK_PATH, VSOCK_PORT);
