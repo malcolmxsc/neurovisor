@@ -197,7 +197,10 @@ impl FirecrackerClient {
             "/snapshot/load",
             SnapshotLoad {
                 snapshot_path: snapshot_path.into(),
-                mem_file_path: mem_file_path.into(),
+                mem_backend: MemBackend {
+                    backend_type: "File".to_string(),
+                    backend_path: mem_file_path.into(),
+                },
                 resume_vm,
             },
         )

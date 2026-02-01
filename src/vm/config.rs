@@ -47,10 +47,17 @@ pub struct SnapshotConfig {
     pub mem_file_path: String,
 }
 
-/// Snapshot load configuration
+/// Memory backend configuration for snapshot loading
+#[derive(Serialize, Debug, Clone)]
+pub struct MemBackend {
+    pub backend_type: String,
+    pub backend_path: String,
+}
+
+/// Snapshot load configuration (v1.14+ API)
 #[derive(Serialize, Debug, Clone)]
 pub struct SnapshotLoad {
     pub snapshot_path: String,
-    pub mem_file_path: String,
+    pub mem_backend: MemBackend,
     pub resume_vm: bool,
 }
