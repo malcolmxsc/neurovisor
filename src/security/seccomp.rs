@@ -136,6 +136,18 @@ impl FirecrackerSeccomp {
         filter.allow(libc::SYS_dup2);       // duplicate fd to specific number
 
         // ─────────────────────────────────────────────────────────────────
+        // Sockets - API socket, vsock communication
+        // ─────────────────────────────────────────────────────────────────
+        filter.allow(libc::SYS_socket);     // create socket
+        filter.allow(libc::SYS_bind);       // bind socket to address
+        filter.allow(libc::SYS_listen);     // listen for connections
+        filter.allow(libc::SYS_accept4);    // accept connection (with flags)
+        filter.allow(libc::SYS_getsockopt); // get socket options
+        filter.allow(libc::SYS_setsockopt); // set socket options
+        filter.allow(libc::SYS_sendto);     // send data
+        filter.allow(libc::SYS_recvfrom);   // receive data
+
+        // ─────────────────────────────────────────────────────────────────
         // Event Loop - async I/O for network, vsock, timers
         // ─────────────────────────────────────────────────────────────────
         filter.allow(libc::SYS_epoll_create1);  // create epoll instance
@@ -154,10 +166,25 @@ impl FirecrackerSeccomp {
         filter.allow(libc::SYS_rt_sigreturn);   // return from signal handler
 
         // ─────────────────────────────────────────────────────────────────
-        // Process - exit cleanly
+        // Process - startup, exit, and thread management
         // ─────────────────────────────────────────────────────────────────
-        filter.allow(libc::SYS_exit);        // exit thread
-        filter.allow(libc::SYS_exit_group);  // exit all threads
+        filter.allow(libc::SYS_exit);           // exit thread
+        filter.allow(libc::SYS_exit_group);     // exit all threads
+        filter.allow(libc::SYS_execve);         // exec (needed for pre_exec hook)
+        filter.allow(libc::SYS_arch_prctl);     // set FS/GS base (TLS setup)
+        filter.allow(libc::SYS_set_tid_address);// thread ID address
+        filter.allow(libc::SYS_set_robust_list);// robust futex list
+        filter.allow(libc::SYS_rseq);           // restartable sequences
+        filter.allow(libc::SYS_prlimit64);      // resource limits
+        filter.allow(libc::SYS_getpid);         // get process ID
+        filter.allow(libc::SYS_gettid);         // get thread ID
+        filter.allow(libc::SYS_prctl);          // process control
+        filter.allow(libc::SYS_sigaltstack);    // signal stack setup
+        filter.allow(libc::SYS_unlink);         // remove files (old socket)
+        filter.allow(libc::SYS_unlinkat);       // remove files (modern)
+        filter.allow(libc::SYS_access);         // check file access
+        filter.allow(libc::SYS_faccessat);      // check file access (modern)
+        filter.allow(libc::SYS_statx);          // extended file stats
 
         // ─────────────────────────────────────────────────────────────────
         // Misc - futex for threading, clock for time

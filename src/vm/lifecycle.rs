@@ -2,19 +2,16 @@
 //!
 //! Functions for spawning Firecracker processes and waiting for API readiness.
 
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::{thread, time};
 use tokio::time::Duration;
 
-use crate::security::FirecrackerSeccomp;
-
 /// Spawn a Firecracker process with the given API socket path
 ///
-/// The spawned process will have a seccomp filter applied that restricts
-/// syscalls to only those required by Firecracker. This is applied via
-/// pre_exec, so it only affects the child process (not the orchestrator).
+/// Note: Firecracker has its own built-in seccomp filter that it applies
+/// internally. We don't need to apply an external seccomp filter here.
+/// See: https://github.com/firecracker-microvm/firecracker/blob/main/docs/seccomp.md
 ///
 /// # Arguments
 /// * `api_socket` - Path to the Unix socket for Firecracker's API
@@ -28,34 +25,15 @@ pub fn spawn_firecracker(
 ) -> Result<Child, Box<dyn std::error::Error>> {
     let firecracker_bin = "./firecracker";
 
-    // SAFETY: pre_exec runs after fork() but before exec() in the child process.
-    // We only call async-signal-safe operations (seccomp filter application).
-    let child = unsafe {
-        Command::new(firecracker_bin)
-            .arg("--api-sock")
-            .arg(api_socket)
-            .stdin(stdin_mode)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .pre_exec(|| {
-                // Apply seccomp filter in the child process before exec
-                // This restricts Firecracker's syscalls without affecting the orchestrator
-                let filter = FirecrackerSeccomp::with_firecracker_defaults();
-                match filter.apply() {
-                    Ok(()) => {
-                        // Note: Can't easily print from pre_exec, filter is applied silently
-                        Ok(())
-                    }
-                    Err(e) => {
-                        // Convert io::Error to the expected type
-                        Err(e)
-                    }
-                }
-            })
-            .spawn()?
-    };
+    let child = Command::new(firecracker_bin)
+        .arg("--api-sock")
+        .arg(api_socket)
+        .stdin(stdin_mode)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()?;
 
-    println!("[INFO] ✅ SECCOMP FILTER APPLIED (Firecracker syscalls restricted)");
+    println!("[INFO] ✅ FIRECRACKER SPAWNED (using built-in seccomp filter)");
 
     Ok(child)
 }

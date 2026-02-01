@@ -2,19 +2,21 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::path::Path;
+use std::sync::Arc;
 
 use hyper::{body::Incoming, server::conn::http1, service::service_fn, Request, Response, Method, StatusCode};
 use hyper_util::rt::TokioIo;
 use http_body_util::Full;
 use hyper::body::Bytes;
 use tokio::net::TcpListener;
+use tokio::time::{interval, Duration};
 
 use neurovisor::vm::{spawn_firecracker, wait_for_api_socket, FirecrackerClient, to_absolute_path};
 use neurovisor::ollama::OllamaClient;
 use neurovisor::grpc::server::InferenceServer;
 use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
 use neurovisor::cgroups::{CgroupManager, ResourceLimits};
-use neurovisor::metrics::encode_metrics;
+use neurovisor::metrics::{encode_metrics, CGROUP_MEMORY_USAGE, CGROUP_CPU_THROTTLED};
 
 const API_SOCKET: &str = "/tmp/firecracker.socket";
 const KERNEL_PATH: &str = "./vmlinuz";
@@ -59,7 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. SET UP CGROUP RESOURCE LIMITS
     // Graceful degradation: if cgroup setup fails, log warning but continue
-    let cgroup_manager = setup_cgroup(VM_ID, firecracker_pid);
+    // Wrapped in Arc to share between metrics collection and cleanup
+    let cgroup_manager = Arc::new(setup_cgroup(VM_ID, firecracker_pid));
 
     // 5. WAIT FOR API
     wait_for_api_socket(API_SOCKET, None)?;
@@ -116,6 +119,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fc_client.start().await?;
     }
 
+    // 7. START CGROUP METRICS COLLECTION (if cgroups are active)
+    let cgroup_metrics_handle = start_cgroup_metrics_collection(
+        Arc::clone(&cgroup_manager),
+        VM_ID.to_string(),
+    );
+
     println!("[INFO] ⏳ WAITING FOR VM TO COMPLETE...");
 
     // Wait for Firecracker process to exit (VM will poweroff after guest_client completes)
@@ -125,9 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Abort background server tasks (they would block forever otherwise)
     grpc_handle.abort();
     metrics_handle.abort();
+    if let Some(handle) = cgroup_metrics_handle {
+        handle.abort();
+    }
 
     // Clean up cgroup if it was set up
-    cleanup_cgroup(cgroup_manager, VM_ID);
+    cleanup_cgroup(&cgroup_manager, VM_ID);
 
     println!("[INFO] 🛑 ORCHESTRATOR EXIT CLEAN");
     Ok(())
@@ -176,13 +188,65 @@ fn setup_cgroup(vm_id: &str, pid: u32) -> Option<CgroupManager> {
 }
 
 /// Clean up cgroup after VM exits
-fn cleanup_cgroup(manager: Option<CgroupManager>, vm_id: &str) {
-    if let Some(m) = manager {
+fn cleanup_cgroup(manager: &Arc<Option<CgroupManager>>, vm_id: &str) {
+    if let Some(m) = manager.as_ref() {
         match m.destroy(vm_id) {
             Ok(()) => println!("[INFO] ✅ CGROUP '{}' DESTROYED", vm_id),
             Err(e) => eprintln!("[WARN] Failed to destroy cgroup '{}': {}", vm_id, e),
         }
     }
+}
+
+/// Start background task to collect cgroup metrics every 5 seconds.
+/// Returns None if cgroups are not available.
+fn start_cgroup_metrics_collection(
+    manager: Arc<Option<CgroupManager>>,
+    vm_id: String,
+) -> Option<tokio::task::JoinHandle<()>> {
+    // Only start collection if cgroups are active
+    if manager.is_none() {
+        return None;
+    }
+
+    println!("[INFO] ✅ CGROUP METRICS COLLECTION STARTED (interval: 5s)");
+
+    let handle = tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(5));
+        let mut last_throttled: u64 = 0;
+
+        loop {
+            interval.tick().await;
+
+            if let Some(ref mgr) = *manager {
+                // Collect memory usage
+                match mgr.get_memory_usage(&vm_id) {
+                    Ok(bytes) => {
+                        CGROUP_MEMORY_USAGE.with_label_values(&[&vm_id]).set(bytes as f64);
+                    }
+                    Err(e) => {
+                        eprintln!("[WARN] Failed to read cgroup memory: {}", e);
+                    }
+                }
+
+                // Collect CPU stats (including throttle count)
+                match mgr.get_cpu_stats(&vm_id) {
+                    Ok(stats) => {
+                        // CGROUP_CPU_THROTTLED is a counter, increment by delta
+                        if stats.nr_throttled > last_throttled {
+                            let delta = stats.nr_throttled - last_throttled;
+                            CGROUP_CPU_THROTTLED.with_label_values(&[&vm_id]).inc_by(delta as f64);
+                            last_throttled = stats.nr_throttled;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[WARN] Failed to read cgroup CPU stats: {}", e);
+                    }
+                }
+            }
+        }
+    });
+
+    Some(handle)
 }
 
 /// Handle HTTP requests for the metrics endpoint
