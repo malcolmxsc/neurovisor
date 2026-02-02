@@ -271,14 +271,6 @@ impl AgentController {
             .map_err(|e| AgentError::VmAcquisitionFailed(e.to_string()))?;
 
         let vsock_path = vm.vsock_listener_path(self.config.vsock_port);
-        println!("[AGENT] Connecting to guest via {}", vsock_path.display());
-
-        // Check if socket exists (for debugging)
-        if vsock_path.exists() {
-            println!("[AGENT] Socket file exists");
-        } else {
-            println!("[AGENT] Socket file does NOT exist yet, will retry...");
-        }
 
         // Connect to guest execution service with retry
         let client_result = ExecutionClient::connect_with_retry(

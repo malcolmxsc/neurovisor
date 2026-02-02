@@ -173,7 +173,7 @@ impl ExecutionClient {
     /// Connect with retry logic for when guest may not be ready
     ///
     /// # Arguments
-    /// * `vsock_path` - The vsock Unix domain socket path
+    /// * `vsock_path` - The vsock Unix domain socket path (with port suffix like `foo.vsock_6000`)
     /// * `max_retries` - Maximum number of connection attempts
     /// * `retry_delay_ms` - Delay between retries in milliseconds
     pub async fn connect_with_retry(
@@ -181,27 +181,31 @@ impl ExecutionClient {
         max_retries: u32,
         retry_delay_ms: u64,
     ) -> Result<Self, ExecutionError> {
+        // Parse the base path (without port suffix) for existence checks
+        let path_str = vsock_path.to_string_lossy();
+        let base_path = if let Some(idx) = path_str.rfind('_') {
+            PathBuf::from(&path_str[..idx])
+        } else {
+            vsock_path.clone()
+        };
+
         let mut last_error = None;
 
         for attempt in 0..max_retries {
-            // Check if socket file exists
-            let exists = vsock_path.exists();
-            println!(
-                "[EXEC] Connection attempt {}/{}, socket exists: {}",
-                attempt + 1,
-                max_retries,
-                exists
-            );
-
             match Self::connect(vsock_path.clone()).await {
                 Ok(client) => {
-                    println!("[EXEC] Connected successfully!");
                     return Ok(client);
                 }
                 Err(e) => {
-                    println!("[EXEC] Connection failed: {}", e);
                     last_error = Some(e);
                     if attempt + 1 < max_retries {
+                        // Only log on first failure
+                        if attempt == 0 {
+                            let exists = base_path.exists();
+                            if !exists {
+                                println!("[EXEC] Waiting for guest (socket not ready)...");
+                            }
+                        }
                         tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
                     }
                 }
