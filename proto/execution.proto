@@ -1,0 +1,40 @@
+syntax = "proto3";
+package neurovisor.execution;
+
+service ExecutionService {
+    // Execute code in the sandboxed VM
+    rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+
+    // Stream execution output for long-running code
+    rpc ExecuteStream(ExecuteRequest) returns (stream ExecuteChunk);
+}
+
+message ExecuteRequest {
+    string language = 1;        // "python", "bash", "javascript"
+    string code = 2;            // The code to execute
+    uint32 timeout_secs = 3;    // Max execution time (default 30)
+    map<string, string> env = 4; // Optional environment variables
+}
+
+message ExecuteResponse {
+    string stdout = 1;
+    string stderr = 2;
+    int32 exit_code = 3;
+    double duration_ms = 4;
+    bool timed_out = 5;
+}
+
+message ExecuteChunk {
+    oneof output {
+        string stdout_chunk = 1;
+        string stderr_chunk = 2;
+    }
+    bool is_final = 3;
+    ExecuteMetadata metadata = 4;
+}
+
+message ExecuteMetadata {
+    int32 exit_code = 1;
+    double duration_ms = 2;
+    bool timed_out = 3;
+}

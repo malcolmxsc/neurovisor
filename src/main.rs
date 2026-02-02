@@ -7,6 +7,7 @@
 //! - Gateway gRPC server for external requests
 //! - Background pool replenisher
 //! - Prometheus metrics endpoint
+//! - Agent mode for LLM-driven code execution
 //!
 //! # Usage
 //!
@@ -19,6 +20,9 @@
 //!
 //! # Use snapshots for faster VM boot
 //! sudo ./target/debug/neurovisor --snapshot
+//!
+//! # Run agent mode (single task, then exit)
+//! sudo ./target/debug/neurovisor --agent "Find all prime numbers under 100"
 //! ```
 
 use std::convert::Infallible;
@@ -32,13 +36,14 @@ use http_body_util::Full;
 use hyper::body::Bytes;
 use tokio::net::TcpListener;
 
-use neurovisor::vm::{VMManager, VMManagerConfig, VMPool};
-use neurovisor::ollama::OllamaClient;
-use neurovisor::grpc::GatewayServer;
-use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
+use neurovisor::agent::{AgentConfig, AgentController};
 use neurovisor::cgroups::ResourceLimits;
-use neurovisor::security::RateLimiter;
+use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
+use neurovisor::grpc::GatewayServer;
 use neurovisor::metrics::encode_metrics;
+use neurovisor::ollama::{ChatClient, OllamaClient};
+use neurovisor::security::RateLimiter;
+use neurovisor::vm::{VMManager, VMManagerConfig, VMPool};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration Constants
@@ -65,6 +70,8 @@ struct Args {
     use_snapshot: bool,
     warm_size: usize,
     max_size: usize,
+    /// Agent mode: run a single task and exit
+    agent_task: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -72,22 +79,31 @@ fn parse_args() -> Args {
 
     let use_snapshot = args.iter().any(|a| a == "--snapshot" || a == "-s");
 
-    let warm_size = args.iter()
+    let warm_size = args
+        .iter()
         .position(|a| a == "--warm")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_WARM_SIZE);
 
-    let max_size = args.iter()
+    let max_size = args
+        .iter()
         .position(|a| a == "--max")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MAX_SIZE);
 
+    let agent_task = args
+        .iter()
+        .position(|a| a == "--agent")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string());
+
     Args {
         use_snapshot,
         warm_size,
         max_size,
+        agent_task,
     }
 }
 
@@ -144,7 +160,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
 
     pool.initialize().await?;
-    println!("[INFO] ✅ VM POOL READY (warm: {}, max: {})", args.warm_size, args.max_size);
+    println!(
+        "[INFO] ✅ VM POOL READY (warm: {}, max: {})",
+        args.warm_size, args.max_size
+    );
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // AGENT MODE - Run a single task and exit
+    // ─────────────────────────────────────────────────────────────────────────
+    if let Some(task) = args.agent_task {
+        return run_agent_mode(task, Arc::clone(&pool)).await;
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // 4. START POOL REPLENISHER
@@ -274,4 +300,77 @@ async fn start_metrics_server(port: u16) {
             }
         });
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Run a single agent task and exit
+async fn run_agent_mode(
+    task: String,
+    pool: Arc<VMPool>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!();
+    println!("╔════════════════════════════════════════════════════════════════╗");
+    println!("║                    NEUROVISOR AGENT MODE                       ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("[AGENT] Task: {}", task);
+    println!();
+
+    // Create chat client for Ollama
+    let chat_client = ChatClient::new("http://localhost:11434");
+
+    // Create agent controller
+    let config = AgentConfig::default();
+    let controller = AgentController::new(chat_client, Arc::clone(&pool), config);
+
+    // Run the agent
+    match controller.run(&task).await {
+        Ok(result) => {
+            println!();
+            println!("╔════════════════════════════════════════════════════════════════╗");
+            println!("║                      TASK COMPLETED                            ║");
+            println!("╚════════════════════════════════════════════════════════════════╝");
+            println!();
+            println!("[AGENT] Iterations: {}", result.iterations);
+            println!("[AGENT] Tool calls: {}", result.tool_calls_made);
+            println!("[AGENT] Trace ID: {}", result.trace_id);
+
+            if !result.execution_records.is_empty() {
+                println!();
+                println!("── Execution History ──────────────────────────────────────────");
+                for (i, record) in result.execution_records.iter().enumerate() {
+                    println!();
+                    println!("  [{}/{}] {} ({:.2}ms)", i + 1, result.execution_records.len(), record.language, record.duration_ms);
+                    println!("  Exit code: {}{}", record.exit_code, if record.timed_out { " (timed out)" } else { "" });
+                    if !record.stdout.is_empty() {
+                        println!("  Stdout: {}", record.stdout.lines().next().unwrap_or(""));
+                        if record.stdout.lines().count() > 1 {
+                            println!("          ... ({} more lines)", record.stdout.lines().count() - 1);
+                        }
+                    }
+                }
+            }
+
+            println!();
+            println!("── Final Response ─────────────────────────────────────────────");
+            println!();
+            println!("{}", result.final_response);
+            println!();
+        }
+        Err(e) => {
+            eprintln!();
+            eprintln!("[AGENT] ERROR: {}", e);
+            eprintln!();
+        }
+    }
+
+    // Cleanup
+    println!("[INFO] Shutting down VM pool...");
+    pool.shutdown().await;
+    println!("[INFO] ✅ AGENT MODE COMPLETE");
+
+    Ok(())
 }

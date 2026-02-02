@@ -3,11 +3,14 @@
 //! This module provides:
 //! - InferenceService gRPC server implementation (single VM mode)
 //! - GatewayServer for multi-VM pool orchestration
+//! - ExecutionClient for code execution in guest VMs
 //! - Protobuf message handling
 
-pub mod server;
+pub mod execution;
 pub mod gateway;
+pub mod server;
 
+pub use execution::{ExecutionClient, ExecutionError};
+pub use gateway::GatewayServer;
 pub use server::inference;
 pub use server::InferenceServer;
-pub use gateway::GatewayServer;

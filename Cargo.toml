@@ -23,6 +23,10 @@ path = "src/bin/guest_client.rs"
 name = "vsock_test"
 path = "src/bin/vsock_test.rs"
 
+[[bin]]
+name = "guest_agent"
+path = "guest/agent/main.rs"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Examples - Showcase demos for portfolio/blog
 # Run with: cargo run --example <name>

@@ -145,6 +145,40 @@ lazy_static! {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Agent Metrics
+// ─────────────────────────────────────────────────────────────────────────────
+
+lazy_static! {
+    /// Total agent tasks started
+    pub static ref AGENT_TASKS_TOTAL: CounterVec = register_counter_vec!(
+        "neurovisor_agent_tasks_total",
+        "Total number of agent tasks started",
+        &["status"]  // "success", "error", "max_iterations"
+    ).unwrap();
+
+    /// Number of iterations per agent task
+    pub static ref AGENT_ITERATIONS: Histogram = register_histogram!(
+        "neurovisor_agent_iterations",
+        "Number of iterations per agent task",
+        vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+    ).unwrap();
+
+    /// Code execution duration in VM
+    pub static ref CODE_EXECUTION_DURATION: Histogram = register_histogram!(
+        "neurovisor_code_execution_seconds",
+        "Duration of code execution in VM",
+        vec![0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+    ).unwrap();
+
+    /// Total code executions
+    pub static ref CODE_EXECUTIONS_TOTAL: CounterVec = register_counter_vec!(
+        "neurovisor_code_executions_total",
+        "Total code executions",
+        &["language", "status"]  // status: "success", "error", "timeout"
+    ).unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Metrics Export
 // ─────────────────────────────────────────────────────────────────────────────
 

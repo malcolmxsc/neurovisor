@@ -12,9 +12,10 @@
 //! - `metrics` - Prometheus metrics for observability
 //! - `security` - Seccomp filters and capability dropping
 
-pub mod vm;
-pub mod ollama;
-pub mod grpc;
+pub mod agent;
 pub mod cgroups;
+pub mod grpc;
 pub mod metrics;
+pub mod ollama;
 pub mod security;
+pub mod vm;
