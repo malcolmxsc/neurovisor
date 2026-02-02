@@ -92,6 +92,38 @@ lazy_static! {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// VM Pool Metrics
+// ─────────────────────────────────────────────────────────────────────────────
+
+lazy_static! {
+    /// Number of pre-warmed VMs ready in the pool
+    pub static ref POOL_WARM_VMS: Gauge = register_gauge!(
+        "neurovisor_pool_warm_vms",
+        "Number of pre-warmed VMs ready in pool"
+    ).unwrap();
+
+    /// Number of VMs currently handling requests
+    pub static ref POOL_ACTIVE_VMS: Gauge = register_gauge!(
+        "neurovisor_pool_active_vms",
+        "Number of VMs currently handling requests"
+    ).unwrap();
+
+    /// Time to acquire a VM from the pool
+    pub static ref VM_ACQUIRE_DURATION: Histogram = register_histogram!(
+        "neurovisor_vm_acquire_seconds",
+        "Time to acquire a VM from pool",
+        vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+    ).unwrap();
+
+    /// Time to boot a new VM
+    pub static ref VM_BOOT_DURATION: Histogram = register_histogram!(
+        "neurovisor_vm_boot_seconds",
+        "Time to boot a new VM",
+        vec![0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0]
+    ).unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // cgroups Resource Metrics
 // ─────────────────────────────────────────────────────────────────────────────
 
