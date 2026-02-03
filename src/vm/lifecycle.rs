@@ -29,8 +29,8 @@ pub fn spawn_firecracker(
         .arg("--api-sock")
         .arg(api_socket)
         .stdin(stdin_mode)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
 
     println!("[INFO] ✅ FIRECRACKER SPAWNED (using built-in seccomp filter)");
