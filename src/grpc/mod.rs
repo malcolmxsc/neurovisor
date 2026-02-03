@@ -10,7 +10,7 @@ pub mod execution;
 pub mod gateway;
 pub mod server;
 
-pub use execution::{ExecutionClient, ExecutionError};
+pub use execution::{ExecutionClient, ExecutionError, OutputChunk, StreamingResult};
 pub use gateway::GatewayServer;
 pub use server::inference;
 pub use server::InferenceServer;

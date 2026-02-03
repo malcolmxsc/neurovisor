@@ -15,13 +15,35 @@ use tonic::transport::Endpoint;
 use tower::service_fn;
 use hyper_util::rt::tokio::TokioIo;
 
-// Include the generated proto code for execution service
 pub mod proto {
     tonic::include_proto!("neurovisor.execution");
 }
 
 pub use proto::{ExecuteRequest, ExecuteResponse, ExecuteChunk, ExecuteMetadata};
+pub use proto::execute_chunk::Output as ChunkOutput;
 use proto::execution_service_client::ExecutionServiceClient;
+
+/// A chunk of streaming output from code execution
+#[derive(Debug, Clone)]
+pub enum OutputChunk {
+    Stdout(String),
+    Stderr(String),
+    Done {
+        exit_code: i32,
+        duration_ms: f64,
+        timed_out: bool,
+    },
+}
+
+/// Final result after streaming execution completes
+#[derive(Debug, Clone)]
+pub struct StreamingResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+    pub duration_ms: f64,
+    pub timed_out: bool,
+}
 
 /// Error type for execution client operations
 #[derive(Debug)]
@@ -79,17 +101,32 @@ async fn vsock_handshake(
     writer.write_all(connect_cmd.as_bytes()).await
         .map_err(|e| ExecutionError::Handshake(format!("Failed to send CONNECT: {}", e)))?;
 
-    // Read response
+    // Read response with timeout
     let mut buf_reader = BufReader::new(reader);
     let mut response = String::new();
-    buf_reader.read_line(&mut response).await
-        .map_err(|e| ExecutionError::Handshake(format!("Failed to read response: {}", e)))?;
+
+    let read_result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        buf_reader.read_line(&mut response)
+    ).await;
+
+    match read_result {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            return Err(ExecutionError::Handshake(format!("Failed to read response: {}", e)));
+        }
+        Err(_) => {
+            return Err(ExecutionError::Handshake(
+                "Timeout waiting for handshake response (guest may not be listening)".to_string()
+            ));
+        }
+    }
 
     // Check response - should be "OK {host_port}\n"
     let response = response.trim();
     if !response.starts_with("OK ") {
         return Err(ExecutionError::Handshake(format!(
-            "Unexpected response: '{}' (expected 'OK <port>')",
+            "Unexpected handshake response: '{}' (expected 'OK <port>')",
             response
         )));
     }
@@ -120,6 +157,12 @@ impl ExecutionClient {
 
         // Tonic requires a valid URI even for UDS connections
         // The actual connection is handled by the custom connector with handshake
+        // Test handshake first to get a proper error message
+        // (tonic's lazy connect hides the actual error)
+        let test_stream = vsock_handshake(&path, port).await?;
+        drop(test_stream); // Close the test connection
+
+        // Now create the actual channel with tonic
         let channel = Endpoint::try_from("http://[::1]:6000")?
             .connect_with_connector(service_fn(move |_| {
                 let p = path.clone();
@@ -130,7 +173,7 @@ impl ExecutionClient {
                 }
             }))
             .await
-            .map_err(|e| ExecutionError::Connection(format!("Failed to connect to {}: {}", vsock_path.display(), e)))?;
+            .map_err(|e| ExecutionError::Connection(format!("gRPC channel error: {}", e)))?;
 
         Ok(Self {
             client: ExecutionServiceClient::new(channel),
@@ -197,15 +240,12 @@ impl ExecutionClient {
                     return Ok(client);
                 }
                 Err(e) => {
+                    if attempt == 0 {
+                        let exists = base_path.exists();
+                        println!("[EXEC] Connection attempt failed: {} (socket exists: {})", e, exists);
+                    }
                     last_error = Some(e);
                     if attempt + 1 < max_retries {
-                        // Only log on first failure
-                        if attempt == 0 {
-                            let exists = base_path.exists();
-                            if !exists {
-                                println!("[EXEC] Waiting for guest (socket not ready)...");
-                            }
-                        }
                         tokio::time::sleep(tokio::time::Duration::from_millis(retry_delay_ms)).await;
                     }
                 }
@@ -260,5 +300,77 @@ impl ExecutionClient {
 
         let response = self.client.execute(request).await?;
         Ok(response.into_inner())
+    }
+
+    /// Execute code with streaming output
+    ///
+    /// Calls the provided callback for each output chunk (stdout/stderr) as it arrives.
+    /// Returns the final aggregated result when execution completes.
+    pub async fn execute_streaming<F>(
+        &mut self,
+        language: &str,
+        code: &str,
+        timeout_secs: u32,
+        mut on_output: F,
+    ) -> Result<StreamingResult, ExecutionError>
+    where
+        F: FnMut(OutputChunk),
+    {
+        let request = ExecuteRequest {
+            language: language.to_string(),
+            code: code.to_string(),
+            timeout_secs,
+            env: std::collections::HashMap::new(),
+        };
+
+        let response = self.client.execute_stream(request).await?;
+        let mut stream = response.into_inner();
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let mut exit_code = 0;
+        let mut duration_ms = 0.0;
+        let mut timed_out = false;
+
+        use tokio_stream::StreamExt;
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
+
+            if let Some(output) = chunk.output {
+                match output {
+                    ChunkOutput::StdoutChunk(s) => {
+                        on_output(OutputChunk::Stdout(s.clone()));
+                        stdout.push_str(&s);
+                    }
+                    ChunkOutput::StderrChunk(s) => {
+                        on_output(OutputChunk::Stderr(s.clone()));
+                        stderr.push_str(&s);
+                    }
+                }
+            }
+
+            if chunk.is_final {
+                if let Some(meta) = chunk.metadata {
+                    exit_code = meta.exit_code;
+                    duration_ms = meta.duration_ms;
+                    timed_out = meta.timed_out;
+                }
+                on_output(OutputChunk::Done {
+                    exit_code,
+                    duration_ms,
+                    timed_out,
+                });
+                break;
+            }
+        }
+
+        Ok(StreamingResult {
+            stdout,
+            stderr,
+            exit_code,
+            duration_ms,
+            timed_out,
+        })
     }
 }

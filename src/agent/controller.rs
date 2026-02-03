@@ -40,8 +40,8 @@ impl Default for AgentConfig {
             execution_timeout_secs: 30,
             system_prompt: None,
             vsock_port: 6000,
-            connection_retries: 10,
-            connection_retry_delay_ms: 500,
+            connection_retries: 20,
+            connection_retry_delay_ms: 250,
         }
     }
 }
@@ -257,7 +257,7 @@ impl AgentController {
         }
     }
 
-    /// Execute code in an isolated VM
+    /// Execute code in an isolated VM with streaming output
     async fn execute_code(
         &self,
         language: &str,
@@ -283,30 +283,47 @@ impl AgentController {
         let mut client = match client_result {
             Ok(c) => c,
             Err(e) => {
-                // Release VM on connection failure
                 self.pool.release(vm).await;
                 return Err(AgentError::ConnectionFailed(e.to_string()));
             }
         };
 
-        // Execute code
+        // Execute code and display output
+        println!("[OUTPUT] ─────────────────────────────────────");
+
         let result = client
             .execute(language, code, self.config.execution_timeout_secs)
             .await;
 
-        // Release VM (always, even on error)
+        // Display output
+        if let Ok(ref response) = result {
+            for line in response.stdout.lines() {
+                println!("[stdout] {}", line);
+            }
+            for line in response.stderr.lines() {
+                println!("[stderr] {}", line);
+            }
+            println!("[OUTPUT] ─────────────────────────────────────");
+            if response.timed_out {
+                println!("[OUTPUT] Timed out after {:.2}ms", response.duration_ms);
+            } else {
+                println!("[OUTPUT] Completed in {:.2}ms (exit: {})", response.duration_ms, response.exit_code);
+            }
+        }
+
+        // Release VM
         self.pool.release(vm).await;
 
         // Convert result
         match result {
-            Ok(response) => Ok(ExecutionRecord {
+            Ok(streaming_result) => Ok(ExecutionRecord {
                 language: language.to_string(),
                 code: code.to_string(),
-                stdout: response.stdout,
-                stderr: response.stderr,
-                exit_code: response.exit_code,
-                duration_ms: response.duration_ms,
-                timed_out: response.timed_out,
+                stdout: streaming_result.stdout,
+                stderr: streaming_result.stderr,
+                exit_code: streaming_result.exit_code,
+                duration_ms: streaming_result.duration_ms,
+                timed_out: streaming_result.timed_out,
             }),
             Err(e) => Err(AgentError::ExecutionFailed(e.to_string())),
         }
