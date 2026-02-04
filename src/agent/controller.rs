@@ -255,6 +255,15 @@ impl AgentController {
                     let language = args["language"].as_str().unwrap_or("bash");
                     let code = args["code"].as_str().unwrap_or("");
 
+                    // Validate: reject empty code
+                    if code.trim().is_empty() {
+                        println!("[AGENT] ⚠️ Rejecting empty code from LLM");
+                        messages.push(ChatMessage::tool(
+                            "Error: code parameter is empty. Please provide actual code to execute.".to_string()
+                        ));
+                        continue;
+                    }
+
                     // Execute in VM
                     println!("[AGENT] Executing {} code:", language);
                     println!("┌─────────────────────────────────────────");
