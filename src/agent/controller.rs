@@ -59,6 +59,8 @@ pub struct AgentResult {
     pub execution_records: Vec<ExecutionRecord>,
     /// Unique trace ID for this agent run
     pub trace_id: String,
+    /// Time for first LLM call in milliseconds (includes model load time)
+    pub model_load_time_ms: Option<f64>,
 }
 
 /// Record of a single code execution
@@ -154,6 +156,8 @@ impl AgentController {
     /// AgentResult containing the final response and execution history
     pub async fn run(&self, task: &str) -> Result<AgentResult, AgentError> {
         let trace_id = Uuid::now_v7().to_string();
+        println!("[AGENT] Trace ID: {}", trace_id);
+
         let tools = vec![ChatClient::execute_code_tool()];
 
         // Initialize conversation
@@ -173,6 +177,7 @@ impl AgentController {
         let mut iterations = 0;
         let mut tool_calls_made = 0;
         let mut execution_records = vec![];
+        let mut model_load_time_ms: Option<f64> = None;
 
         loop {
             iterations += 1;
@@ -181,11 +186,25 @@ impl AgentController {
                 return Err(AgentError::MaxIterationsReached);
             }
 
-            // Call Ollama with tools
+            // Call Ollama with tools (track timing, especially for first call which includes model load)
+            let is_first_call = iterations == 1;
+            if is_first_call {
+                println!("[AGENT] Calling {} (first call includes model load time)...", self.config.model);
+            }
+            let call_start = std::time::Instant::now();
+
             let response = self
                 .chat_client
                 .chat(messages.clone(), &self.config.model, Some(tools.clone()))
                 .await?;
+
+            let call_duration_ms = call_start.elapsed().as_secs_f64() * 1000.0;
+            if is_first_call {
+                model_load_time_ms = Some(call_duration_ms);
+                println!("[AGENT] First LLM call completed in {:.2}ms (includes model load)", call_duration_ms);
+            } else {
+                println!("[AGENT] LLM call {} completed in {:.2}ms", iterations, call_duration_ms);
+            }
 
             // Add assistant response to history
             messages.push(response.message.clone());
@@ -206,6 +225,7 @@ impl AgentController {
                     tool_calls_made,
                     execution_records,
                     trace_id,
+                    model_load_time_ms,
                 });
             }
 
@@ -225,7 +245,7 @@ impl AgentController {
                         println!("│ {}", line);
                     }
                     println!("└─────────────────────────────────────────");
-                    let result = self.execute_code(language, code).await;
+                    let result = self.execute_code(language, code, &trace_id).await;
 
                     // Format result for Ollama
                     let tool_response = match &result {
@@ -258,10 +278,14 @@ impl AgentController {
     }
 
     /// Execute code in an isolated VM with streaming output
+    ///
+    /// The trace_id is propagated to the guest via the `NEUROVISOR_TRACE_ID` environment variable,
+    /// enabling distributed tracing across host-guest boundaries.
     async fn execute_code(
         &self,
         language: &str,
         code: &str,
+        trace_id: &str,
     ) -> Result<ExecutionRecord, AgentError> {
         // Acquire VM from pool
         let vm = self
@@ -291,8 +315,12 @@ impl AgentController {
         // Execute code and display output
         println!("[OUTPUT] ─────────────────────────────────────");
 
+        // Propagate trace_id to guest via environment variable
+        let mut env = std::collections::HashMap::new();
+        env.insert("NEUROVISOR_TRACE_ID".to_string(), trace_id.to_string());
+
         let result = client
-            .execute(language, code, self.config.execution_timeout_secs)
+            .execute_with_env(language, code, self.config.execution_timeout_secs, env)
             .await;
 
         // Display output

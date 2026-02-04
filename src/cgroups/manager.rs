@@ -23,9 +23,94 @@
 //! - CPU: Process gets throttled if it exceeds its quota
 //! - Memory: Process gets OOM-killed if it exceeds its limit
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+
+/// Predefined VM size tiers for common workloads
+///
+/// These provide sensible defaults matching the blueprint:
+/// - Small: Simple agents, lightweight tasks
+/// - Medium: Standard workloads (default)
+/// - Large: Heavy computation, ML tasks
+///
+/// # Example
+///
+/// ```ignore
+/// use neurovisor::cgroups::VMSize;
+///
+/// // Use preset sizes
+/// let limits = VMSize::Medium.limits();
+///
+/// // Or parse from string (useful for CLI args)
+/// let size: VMSize = "large".parse().unwrap();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VMSize {
+    /// 1 CPU core, 2GB RAM - Simple agents, lightweight tasks
+    Small,
+    /// 2 CPU cores, 4GB RAM - Standard workloads (default)
+    #[default]
+    Medium,
+    /// 4 CPU cores, 8GB RAM - Heavy computation, ML tasks
+    Large,
+}
+
+impl VMSize {
+    /// Convert VM size to concrete resource limits
+    pub fn limits(&self) -> ResourceLimits {
+        match self {
+            VMSize::Small => ResourceLimits::small(),
+            VMSize::Medium => ResourceLimits::medium(),
+            VMSize::Large => ResourceLimits::large(),
+        }
+    }
+
+    /// Get CPU core count for this size
+    pub fn cpu_cores(&self) -> f64 {
+        match self {
+            VMSize::Small => 1.0,
+            VMSize::Medium => 2.0,
+            VMSize::Large => 4.0,
+        }
+    }
+
+    /// Get memory in GB for this size
+    pub fn memory_gb(&self) -> f64 {
+        match self {
+            VMSize::Small => 2.0,
+            VMSize::Medium => 4.0,
+            VMSize::Large => 8.0,
+        }
+    }
+}
+
+impl fmt::Display for VMSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VMSize::Small => write!(f, "small (1 CPU, 2GB)"),
+            VMSize::Medium => write!(f, "medium (2 CPU, 4GB)"),
+            VMSize::Large => write!(f, "large (4 CPU, 8GB)"),
+        }
+    }
+}
+
+impl std::str::FromStr for VMSize {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "small" | "s" => Ok(VMSize::Small),
+            "medium" | "m" | "med" => Ok(VMSize::Medium),
+            "large" | "l" | "lg" => Ok(VMSize::Large),
+            _ => Err(format!(
+                "Invalid VM size '{}'. Valid options: small, medium, large",
+                s
+            )),
+        }
+    }
+}
 
 /// Base path for cgroup v2 filesystem
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
@@ -334,5 +419,65 @@ mod tests {
         let custom = ResourceLimits::custom(1.5, 3.0);
         assert_eq!(custom.cpu_cores, 1.5);
         assert_eq!(custom.memory_bytes, (3.0 * 1024.0 * 1024.0 * 1024.0) as u64);
+    }
+
+    #[test]
+    fn test_vm_size_enum() {
+        // Test limits() conversion
+        let small_limits = VMSize::Small.limits();
+        assert_eq!(small_limits.cpu_cores, 1.0);
+        assert_eq!(small_limits.memory_bytes, 2 * 1024 * 1024 * 1024);
+
+        let medium_limits = VMSize::Medium.limits();
+        assert_eq!(medium_limits.cpu_cores, 2.0);
+        assert_eq!(medium_limits.memory_bytes, 4 * 1024 * 1024 * 1024);
+
+        let large_limits = VMSize::Large.limits();
+        assert_eq!(large_limits.cpu_cores, 4.0);
+        assert_eq!(large_limits.memory_bytes, 8 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_vm_size_default() {
+        let default_size = VMSize::default();
+        assert_eq!(default_size, VMSize::Medium);
+    }
+
+    #[test]
+    fn test_vm_size_from_str() {
+        // Full names
+        assert_eq!("small".parse::<VMSize>().unwrap(), VMSize::Small);
+        assert_eq!("medium".parse::<VMSize>().unwrap(), VMSize::Medium);
+        assert_eq!("large".parse::<VMSize>().unwrap(), VMSize::Large);
+
+        // Abbreviations
+        assert_eq!("s".parse::<VMSize>().unwrap(), VMSize::Small);
+        assert_eq!("m".parse::<VMSize>().unwrap(), VMSize::Medium);
+        assert_eq!("l".parse::<VMSize>().unwrap(), VMSize::Large);
+
+        // Case insensitive
+        assert_eq!("LARGE".parse::<VMSize>().unwrap(), VMSize::Large);
+        assert_eq!("Medium".parse::<VMSize>().unwrap(), VMSize::Medium);
+
+        // Invalid
+        assert!("xlarge".parse::<VMSize>().is_err());
+    }
+
+    #[test]
+    fn test_vm_size_display() {
+        assert_eq!(format!("{}", VMSize::Small), "small (1 CPU, 2GB)");
+        assert_eq!(format!("{}", VMSize::Medium), "medium (2 CPU, 4GB)");
+        assert_eq!(format!("{}", VMSize::Large), "large (4 CPU, 8GB)");
+    }
+
+    #[test]
+    fn test_vm_size_helpers() {
+        assert_eq!(VMSize::Small.cpu_cores(), 1.0);
+        assert_eq!(VMSize::Medium.cpu_cores(), 2.0);
+        assert_eq!(VMSize::Large.cpu_cores(), 4.0);
+
+        assert_eq!(VMSize::Small.memory_gb(), 2.0);
+        assert_eq!(VMSize::Medium.memory_gb(), 4.0);
+        assert_eq!(VMSize::Large.memory_gb(), 8.0);
     }
 }

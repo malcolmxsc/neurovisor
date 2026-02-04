@@ -8,12 +8,15 @@
 //! Run with: cargo run --example metrics_demo
 //! (Requires Ollama running on localhost:11434)
 
-use neurovisor::ollama::OllamaClient;
-use neurovisor::grpc::server::InferenceServer;
-use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
+use std::sync::Arc;
+
 use neurovisor::grpc::inference::inference_service_client::InferenceServiceClient;
+use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
 use neurovisor::grpc::inference::InferenceRequest;
-use neurovisor::metrics::{encode_metrics, CGROUP_MEMORY_USAGE, CGROUP_CPU_THROTTLED};
+use neurovisor::grpc::server::InferenceServer;
+use neurovisor::metrics::{encode_metrics, CGROUP_CPU_THROTTLED, CGROUP_MEMORY_USAGE};
+use neurovisor::ollama::OllamaClient;
+use neurovisor::security::RateLimiter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -26,7 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("1. Starting gRPC server on {}...", addr);
 
     let ollama = OllamaClient::new("http://localhost:11434");
-    let inference_server = InferenceServer::new(ollama);
+    let rate_limiter = Arc::new(RateLimiter::new(100, 50.0));
+    let inference_server = InferenceServer::new(ollama, rate_limiter);
     let service = InferenceServiceServer::new(inference_server);
 
     let server_handle = tokio::spawn(async move {

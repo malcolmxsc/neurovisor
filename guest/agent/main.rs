@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::os::unix::io::FromRawFd;
 use std::process::Stdio;
 
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use tonic::{Request, Response, Status};
@@ -47,10 +48,16 @@ impl ExecutionService for ExecutionServer {
         let req = request.into_inner();
         let start = std::time::Instant::now();
 
+        // Extract trace_id from environment if present
+        let trace_id = req.env.get("NEUROVISOR_TRACE_ID")
+            .map(|s| s.as_str())
+            .unwrap_or("none");
+
         println!(
-            "[GUEST] Execute request: language={}, code_len={}",
+            "[GUEST] Execute request: language={}, code_len={}, trace_id={}",
             req.language,
-            req.code.len()
+            req.code.len(),
+            trace_id
         );
 
         // Build command based on language
@@ -97,8 +104,8 @@ impl ExecutionService for ExecutionServer {
                 let exit_code = output.status.code().unwrap_or(-1);
 
                 println!(
-                    "[GUEST] Execution complete: exit_code={}, duration={:.2}ms",
-                    exit_code, duration_ms
+                    "[GUEST] Execution complete: exit_code={}, duration={:.2}ms, trace_id={}",
+                    exit_code, duration_ms, trace_id
                 );
 
                 Ok(Response::new(ExecuteResponse {
@@ -137,10 +144,16 @@ impl ExecutionService for ExecutionServer {
         let req = request.into_inner();
         let start = std::time::Instant::now();
 
+        // Extract trace_id from environment if present
+        let trace_id = req.env.get("NEUROVISOR_TRACE_ID")
+            .map(|s| s.as_str())
+            .unwrap_or("none");
+
         println!(
-            "[GUEST] ExecuteStream request: language={}, code_len={}",
+            "[GUEST] ExecuteStream request: language={}, code_len={}, trace_id={}",
             req.language,
-            req.code.len()
+            req.code.len(),
+            trace_id
         );
 
         // Build command based on language
@@ -178,42 +191,74 @@ impl ExecutionService for ExecutionServer {
                 cmd.env(key, value);
             }
 
-            let result = timeout(timeout_duration, cmd.output()).await;
+            // Spawn the child process
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(Status::internal(format!("Failed to spawn: {}", e)))).await;
+                    return;
+                }
+            };
+
+            // Take stdout and stderr handles
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+
+            // Clone tx for concurrent readers
+            let tx_stdout = tx.clone();
+            let tx_stderr = tx.clone();
+
+            // Spawn stdout reader task
+            let stdout_task = tokio::spawn(async move {
+                if let Some(stdout) = stdout {
+                    let mut reader = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        let chunk = ExecuteChunk {
+                            output: Some(Output::StdoutChunk(format!("{}\n", line))),
+                            is_final: false,
+                            metadata: None,
+                        };
+                        if tx_stdout.send(Ok(chunk)).await.is_err() {
+                            break; // Client disconnected
+                        }
+                    }
+                }
+            });
+
+            // Spawn stderr reader task
+            let stderr_task = tokio::spawn(async move {
+                if let Some(stderr) = stderr {
+                    let mut reader = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = reader.next_line().await {
+                        let chunk = ExecuteChunk {
+                            output: Some(Output::StderrChunk(format!("{}\n", line))),
+                            is_final: false,
+                            metadata: None,
+                        };
+                        if tx_stderr.send(Ok(chunk)).await.is_err() {
+                            break; // Client disconnected
+                        }
+                    }
+                }
+            });
+
+            // Wait for process with timeout
+            let wait_result = timeout(timeout_duration, child.wait()).await;
             let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-            match result {
-                Ok(Ok(output)) => {
-                    // Send stdout chunks
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    if !stdout.is_empty() {
-                        let _ = tx
-                            .send(Ok(ExecuteChunk {
-                                output: Some(Output::StdoutChunk(stdout)),
-                                is_final: false,
-                                metadata: None,
-                            }))
-                            .await;
-                    }
+            // Wait for readers to finish
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
 
-                    // Send stderr chunks
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    if !stderr.is_empty() {
-                        let _ = tx
-                            .send(Ok(ExecuteChunk {
-                                output: Some(Output::StderrChunk(stderr)),
-                                is_final: false,
-                                metadata: None,
-                            }))
-                            .await;
-                    }
-
-                    // Send final chunk with metadata
+            // Send final chunk with metadata
+            match wait_result {
+                Ok(Ok(status)) => {
                     let _ = tx
                         .send(Ok(ExecuteChunk {
                             output: None,
                             is_final: true,
                             metadata: Some(ExecuteMetadata {
-                                exit_code: output.status.code().unwrap_or(-1),
+                                exit_code: status.code().unwrap_or(-1),
                                 duration_ms,
                                 timed_out: false,
                             }),
@@ -224,10 +269,11 @@ impl ExecutionService for ExecutionServer {
                     let _ = tx.send(Err(Status::internal(e.to_string()))).await;
                 }
                 Err(_) => {
-                    // Timeout
+                    // Timeout - kill the process
+                    let _ = child.kill().await;
                     let _ = tx
                         .send(Ok(ExecuteChunk {
-                            output: Some(Output::StderrChunk("Execution timed out".to_string())),
+                            output: Some(Output::StderrChunk("Execution timed out\n".to_string())),
                             is_final: true,
                             metadata: Some(ExecuteMetadata {
                                 exit_code: -1,

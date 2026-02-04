@@ -190,7 +190,7 @@ impl VMManager {
         // Configure boot source
         handle.fc_client.boot_source(
             &kernel_abs,
-            "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/bin/run_guest.sh",
+            "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=0 root=/dev/vda rw init=/usr/local/bin/run_guest.sh",
         ).await.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
         })?;

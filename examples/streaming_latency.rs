@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Model:  {}\n", model);
     println!("─── Streaming Response ───");
 
-    let mut stream = client.generate_stream(prompt, model).await?;
+    let mut stream = client.generate_stream(prompt, model, None).await?;
 
     let mut token_count = 0;
 

@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```bash
-//! # Run as daemon (default: 3 warm VMs, max 10)
+//! # Run as daemon (default: 3 warm VMs, max 10, medium size)
 //! sudo ./target/debug/neurovisor
 //!
 //! # Custom pool size
@@ -20,6 +20,10 @@
 //!
 //! # Use snapshots for faster VM boot
 //! sudo ./target/debug/neurovisor --snapshot
+//!
+//! # Choose VM size tier (small/medium/large)
+//! sudo ./target/debug/neurovisor --size large    # 4 CPU, 8GB RAM
+//! sudo ./target/debug/neurovisor --size small    # 1 CPU, 2GB RAM
 //!
 //! # Run agent mode (single task, then exit)
 //! sudo ./target/debug/neurovisor --agent "Find all prime numbers under 100"
@@ -37,7 +41,7 @@ use hyper::body::Bytes;
 use tokio::net::TcpListener;
 
 use neurovisor::agent::{AgentConfig, AgentController};
-use neurovisor::cgroups::ResourceLimits;
+use neurovisor::cgroups::VMSize;
 use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
 use neurovisor::grpc::GatewayServer;
 use neurovisor::metrics::encode_metrics;
@@ -70,8 +74,12 @@ struct Args {
     use_snapshot: bool,
     warm_size: usize,
     max_size: usize,
+    /// VM size tier (small, medium, large)
+    vm_size: VMSize,
     /// Agent mode: run a single task and exit
     agent_task: Option<String>,
+    /// LLM model to use (default: qwen3)
+    model: String,
 }
 
 fn parse_args() -> Args {
@@ -93,17 +101,33 @@ fn parse_args() -> Args {
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_MAX_SIZE);
 
+    let vm_size = args
+        .iter()
+        .position(|a| a == "--size")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse::<VMSize>().ok())
+        .unwrap_or_default();
+
     let agent_task = args
         .iter()
         .position(|a| a == "--agent")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
+    let model = args
+        .iter()
+        .position(|a| a == "--model")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "qwen3".to_string());
+
     Args {
         use_snapshot,
         warm_size,
         max_size,
+        vm_size,
         agent_task,
+        model,
     }
 }
 
@@ -126,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let boot_mode = if args.use_snapshot { "snapshot" } else { "fresh" };
     println!("[INFO] Boot mode: {}", boot_mode);
     println!("[INFO] Pool config: warm={}, max={}", args.warm_size, args.max_size);
+    println!("[INFO] VM size: {}", args.vm_size);
     println!();
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -143,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         rootfs_path: ROOTFS_PATH.into(),
         snapshot_path: if args.use_snapshot { Some(SNAPSHOT_PATH.into()) } else { None },
         mem_path: if args.use_snapshot { Some(MEM_PATH.into()) } else { None },
-        resource_limits: ResourceLimits::medium(),
+        resource_limits: args.vm_size.limits(),
         vsock_port: VSOCK_PORT,
     };
 
@@ -169,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // AGENT MODE - Run a single task and exit
     // ─────────────────────────────────────────────────────────────────────────
     if let Some(task) = args.agent_task {
-        return run_agent_mode(task, Arc::clone(&pool)).await;
+        return run_agent_mode(task, Arc::clone(&pool), args.model).await;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -208,6 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("║  Gateway:  0.0.0.0:{}                                       ║", GATEWAY_PORT);
     println!("║  Metrics:  http://0.0.0.0:{}/metrics                        ║", METRICS_PORT);
     println!("║  VM Pool:  {} warm, {} max                                     ║", args.warm_size, args.max_size);
+    println!("║  VM Size:  {:<48}║", format!("{}", args.vm_size));
     println!("╚════════════════════════════════════════════════════════════════╝");
     println!();
     println!("[INFO] Press Ctrl+C to shutdown gracefully");
@@ -310,6 +336,7 @@ async fn start_metrics_server(port: u16) {
 async fn run_agent_mode(
     task: String,
     pool: Arc<VMPool>,
+    model: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!();
     println!("╔════════════════════════════════════════════════════════════════╗");
@@ -317,13 +344,17 @@ async fn run_agent_mode(
     println!("╚════════════════════════════════════════════════════════════════╝");
     println!();
     println!("[AGENT] Task: {}", task);
+    println!("[AGENT] Model: {}", model);
     println!();
 
     // Create chat client for Ollama
     let chat_client = ChatClient::new("http://localhost:11434");
 
-    // Create agent controller
-    let config = AgentConfig::default();
+    // Create agent controller with specified model
+    let config = AgentConfig {
+        model,
+        ..AgentConfig::default()
+    };
     let controller = AgentController::new(chat_client, Arc::clone(&pool), config);
 
     // Run the agent
@@ -337,6 +368,9 @@ async fn run_agent_mode(
             println!("[AGENT] Iterations: {}", result.iterations);
             println!("[AGENT] Tool calls: {}", result.tool_calls_made);
             println!("[AGENT] Trace ID: {}", result.trace_id);
+            if let Some(load_time) = result.model_load_time_ms {
+                println!("[AGENT] Model load time: {:.2}ms ({:.2}s)", load_time, load_time / 1000.0);
+            }
 
             if !result.execution_records.is_empty() {
                 println!();

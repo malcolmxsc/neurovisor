@@ -33,4 +33,4 @@
 
 pub mod manager;
 
-pub use manager::{CgroupManager, CpuStats, ResourceLimits};
+pub use manager::{CgroupManager, CpuStats, ResourceLimits, VMSize};

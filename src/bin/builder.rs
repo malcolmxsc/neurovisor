@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fc.boot_source(
         &kernel_abs,
         // Use snapshot_init.sh which sets up the system then sleeps (ready for snapshot)
-        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/usr/local/bin/snapshot_init.sh",
+        "console=ttyS0 reboot=k panic=1 pci=off quiet loglevel=0 root=/dev/vda rw init=/usr/local/bin/snapshot_init.sh",
     )
     .await?;
 
