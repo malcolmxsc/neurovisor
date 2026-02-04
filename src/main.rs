@@ -27,6 +27,9 @@
 //!
 //! # Run agent mode (single task, then exit)
 //! sudo ./target/debug/neurovisor --agent "Find all prime numbers under 100"
+//!
+//! # Push metrics to Pushgateway (for batch/ephemeral jobs)
+//! sudo ./target/debug/neurovisor --agent "task" --pushgateway http://localhost:9091
 //! ```
 
 use std::convert::Infallible;
@@ -44,7 +47,7 @@ use neurovisor::agent::{AgentConfig, AgentController};
 use neurovisor::cgroups::VMSize;
 use neurovisor::grpc::inference::inference_service_server::InferenceServiceServer;
 use neurovisor::grpc::GatewayServer;
-use neurovisor::metrics::encode_metrics;
+use neurovisor::metrics::{encode_metrics, push_to_gateway};
 use neurovisor::ollama::{ChatClient, OllamaClient};
 use neurovisor::security::RateLimiter;
 use neurovisor::vm::{VMManager, VMManagerConfig, VMPool};
@@ -80,6 +83,8 @@ struct Args {
     agent_task: Option<String>,
     /// LLM model to use (default: qwen3)
     model: String,
+    /// Pushgateway URL for pushing metrics before exit (agent mode)
+    pushgateway: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -121,6 +126,12 @@ fn parse_args() -> Args {
         .map(|s| s.to_string())
         .unwrap_or_else(|| "qwen3".to_string());
 
+    let pushgateway = args
+        .iter()
+        .position(|a| a == "--pushgateway")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string());
+
     Args {
         use_snapshot,
         warm_size,
@@ -128,6 +139,7 @@ fn parse_args() -> Args {
         vm_size,
         agent_task,
         model,
+        pushgateway,
     }
 }
 
@@ -194,7 +206,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // AGENT MODE - Run a single task and exit
     // ─────────────────────────────────────────────────────────────────────────
     if let Some(task) = args.agent_task {
-        return run_agent_mode(task, Arc::clone(&pool), args.model).await;
+        return run_agent_mode(task, Arc::clone(&pool), args.model, args.pushgateway).await;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -337,6 +349,7 @@ async fn run_agent_mode(
     task: String,
     pool: Arc<VMPool>,
     model: String,
+    pushgateway: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!();
     println!("╔════════════════════════════════════════════════════════════════╗");
@@ -358,7 +371,7 @@ async fn run_agent_mode(
     let controller = AgentController::new(chat_client, Arc::clone(&pool), config);
 
     // Run the agent
-    match controller.run(&task).await {
+    let trace_id = match controller.run(&task).await {
         Ok(result) => {
             println!();
             println!("╔════════════════════════════════════════════════════════════════╗");
@@ -393,11 +406,23 @@ async fn run_agent_mode(
             println!();
             println!("{}", result.final_response);
             println!();
+
+            Some(result.trace_id)
         }
         Err(e) => {
             eprintln!();
             eprintln!("[AGENT] ERROR: {}", e);
             eprintln!();
+            None
+        }
+    };
+
+    // Push metrics to Pushgateway if configured
+    if let Some(gateway_url) = pushgateway {
+        println!("[INFO] Pushing metrics to Pushgateway at {}...", gateway_url);
+        match push_to_gateway(&gateway_url, "neurovisor_agent", trace_id.as_deref()).await {
+            Ok(()) => println!("[INFO] ✅ Metrics pushed to Pushgateway"),
+            Err(e) => eprintln!("[WARN] Failed to push metrics: {}", e),
         }
     }
 

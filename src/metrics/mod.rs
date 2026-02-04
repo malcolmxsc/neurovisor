@@ -176,6 +176,21 @@ lazy_static! {
         "Total code executions",
         &["language", "status"]  // status: "success", "error", "timeout"
     ).unwrap();
+
+    /// LLM model load time (first call includes loading model into memory)
+    pub static ref MODEL_LOAD_DURATION: HistogramVec = register_histogram_vec!(
+        "neurovisor_model_load_seconds",
+        "Time for first LLM call (includes model loading)",
+        &["model"],
+        vec![1.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0]
+    ).unwrap();
+
+    /// Total tool calls made by agent
+    pub static ref AGENT_TOOL_CALLS_TOTAL: CounterVec = register_counter_vec!(
+        "neurovisor_agent_tool_calls_total",
+        "Total tool calls made by agent",
+        &["tool"]  // "execute_code"
+    ).unwrap();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,6 +206,51 @@ pub fn encode_metrics() -> String {
     let mut buffer = Vec::new();
     encoder.encode(&metric_families, &mut buffer).unwrap();
     String::from_utf8(buffer).unwrap()
+}
+
+/// Push all metrics to a Prometheus Pushgateway
+///
+/// This is the standard approach for batch/ephemeral jobs that complete
+/// before Prometheus can scrape them. The job pushes metrics before exit,
+/// and Prometheus scrapes the Pushgateway.
+///
+/// # Arguments
+/// * `gateway_url` - Base URL of the Pushgateway (e.g., "http://localhost:9091")
+/// * `job` - Job name for grouping metrics (e.g., "neurovisor_agent")
+/// * `instance` - Optional instance label (e.g., trace_id)
+///
+/// # Example
+/// ```ignore
+/// push_to_gateway("http://localhost:9091", "neurovisor_agent", Some("trace-123")).await?;
+/// ```
+pub async fn push_to_gateway(
+    gateway_url: &str,
+    job: &str,
+    instance: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let metrics = encode_metrics();
+
+    // Build URL: /metrics/job/{job}[/instance/{instance}]
+    let url = match instance {
+        Some(inst) => format!("{}/metrics/job/{}/instance/{}", gateway_url, job, inst),
+        None => format!("{}/metrics/job/{}", gateway_url, job),
+    };
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Content-Type", "text/plain")
+        .body(metrics)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Pushgateway returned {}: {}", status, body).into());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -7,6 +7,11 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use crate::metrics::{
+    AGENT_ITERATIONS, AGENT_TASKS_TOTAL, AGENT_TOOL_CALLS_TOTAL,
+    CODE_EXECUTIONS_TOTAL, CODE_EXECUTION_DURATION, MODEL_LOAD_DURATION,
+};
+
 use crate::grpc::{ExecutionClient, ExecutionError};
 use crate::ollama::{
     parse_tool_calls_from_text, ChatClient, ChatError, ChatMessage, DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -183,6 +188,9 @@ impl AgentController {
             iterations += 1;
 
             if iterations > self.config.max_iterations {
+                // Record max_iterations failure metric
+                AGENT_TASKS_TOTAL.with_label_values(&["max_iterations"]).inc();
+                AGENT_ITERATIONS.observe(iterations as f64);
                 return Err(AgentError::MaxIterationsReached);
             }
 
@@ -201,6 +209,10 @@ impl AgentController {
             let call_duration_ms = call_start.elapsed().as_secs_f64() * 1000.0;
             if is_first_call {
                 model_load_time_ms = Some(call_duration_ms);
+                // Record model load time metric
+                MODEL_LOAD_DURATION
+                    .with_label_values(&[&self.config.model])
+                    .observe(call_duration_ms / 1000.0); // Convert to seconds
                 println!("[AGENT] First LLM call completed in {:.2}ms (includes model load)", call_duration_ms);
             } else {
                 println!("[AGENT] LLM call {} completed in {:.2}ms", iterations, call_duration_ms);
@@ -219,6 +231,10 @@ impl AgentController {
 
             if tool_calls.is_empty() {
                 // No tool calls - model is done
+                // Record success metrics
+                AGENT_TASKS_TOTAL.with_label_values(&["success"]).inc();
+                AGENT_ITERATIONS.observe(iterations as f64);
+
                 return Ok(AgentResult {
                     final_response: response.message.content,
                     iterations,
@@ -232,6 +248,7 @@ impl AgentController {
             for tool_call in tool_calls {
                 if tool_call.function.name == "execute_code" {
                     tool_calls_made += 1;
+                    AGENT_TOOL_CALLS_TOTAL.with_label_values(&["execute_code"]).inc();
 
                     // Parse arguments
                     let args = &tool_call.function.arguments;
@@ -342,18 +359,34 @@ impl AgentController {
         // Release VM
         self.pool.release(vm).await;
 
-        // Convert result
+        // Convert result and record metrics
         match result {
-            Ok(streaming_result) => Ok(ExecutionRecord {
-                language: language.to_string(),
-                code: code.to_string(),
-                stdout: streaming_result.stdout,
-                stderr: streaming_result.stderr,
-                exit_code: streaming_result.exit_code,
-                duration_ms: streaming_result.duration_ms,
-                timed_out: streaming_result.timed_out,
-            }),
-            Err(e) => Err(AgentError::ExecutionFailed(e.to_string())),
+            Ok(streaming_result) => {
+                // Record execution metrics
+                CODE_EXECUTION_DURATION.observe(streaming_result.duration_ms / 1000.0);
+                let status = if streaming_result.timed_out {
+                    "timeout"
+                } else if streaming_result.exit_code == 0 {
+                    "success"
+                } else {
+                    "error"
+                };
+                CODE_EXECUTIONS_TOTAL.with_label_values(&[language, status]).inc();
+
+                Ok(ExecutionRecord {
+                    language: language.to_string(),
+                    code: code.to_string(),
+                    stdout: streaming_result.stdout,
+                    stderr: streaming_result.stderr,
+                    exit_code: streaming_result.exit_code,
+                    duration_ms: streaming_result.duration_ms,
+                    timed_out: streaming_result.timed_out,
+                })
+            }
+            Err(e) => {
+                CODE_EXECUTIONS_TOTAL.with_label_values(&[language, "error"]).inc();
+                Err(AgentError::ExecutionFailed(e.to_string()))
+            }
         }
     }
 }
