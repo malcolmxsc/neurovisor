@@ -145,51 +145,68 @@ lazy_static! {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Agent Metrics
+// Agent Metrics (with trace_id for correlation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 lazy_static! {
     /// Total agent tasks started
+    /// Labels: status, trace_id
     pub static ref AGENT_TASKS_TOTAL: CounterVec = register_counter_vec!(
         "neurovisor_agent_tasks_total",
         "Total number of agent tasks started",
-        &["status"]  // "success", "error", "max_iterations"
+        &["status", "trace_id"]  // status: "success", "error", "max_iterations"
     ).unwrap();
 
     /// Number of iterations per agent task
-    pub static ref AGENT_ITERATIONS: Histogram = register_histogram!(
+    /// Labels: trace_id
+    pub static ref AGENT_ITERATIONS: HistogramVec = register_histogram_vec!(
         "neurovisor_agent_iterations",
         "Number of iterations per agent task",
+        &["trace_id"],
         vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
     ).unwrap();
 
     /// Code execution duration in VM
-    pub static ref CODE_EXECUTION_DURATION: Histogram = register_histogram!(
+    /// Labels: language, trace_id
+    pub static ref CODE_EXECUTION_DURATION: HistogramVec = register_histogram_vec!(
         "neurovisor_code_execution_seconds",
         "Duration of code execution in VM",
+        &["language", "trace_id"],
         vec![0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
     ).unwrap();
 
     /// Total code executions
+    /// Labels: language, status, trace_id
     pub static ref CODE_EXECUTIONS_TOTAL: CounterVec = register_counter_vec!(
         "neurovisor_code_executions_total",
         "Total code executions",
-        &["language", "status"]  // status: "success", "error", "timeout"
+        &["language", "status", "trace_id"]  // status: "success", "error", "timeout"
     ).unwrap();
 
     /// LLM model load time (first call includes loading model into memory)
+    /// Labels: model, trace_id
     pub static ref MODEL_LOAD_DURATION: HistogramVec = register_histogram_vec!(
         "neurovisor_model_load_seconds",
         "Time for first LLM call (includes model loading)",
-        &["model"],
+        &["model", "trace_id"],
         vec![1.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0]
     ).unwrap();
 
     /// Total tool calls made by agent
+    /// Labels: tool, trace_id
     pub static ref AGENT_TOOL_CALLS_TOTAL: CounterVec = register_counter_vec!(
         "neurovisor_agent_tool_calls_total",
         "Total tool calls made by agent",
-        &["tool"]  // "execute_code"
+        &["tool", "trace_id"]  // tool: "execute_code"
+    ).unwrap();
+
+    /// LLM call duration (each iteration)
+    /// Labels: model, iteration, trace_id
+    pub static ref LLM_CALL_DURATION: HistogramVec = register_histogram_vec!(
+        "neurovisor_llm_call_seconds",
+        "Duration of each LLM call",
+        &["model", "trace_id"],
+        vec![0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0]
     ).unwrap();
 }
 

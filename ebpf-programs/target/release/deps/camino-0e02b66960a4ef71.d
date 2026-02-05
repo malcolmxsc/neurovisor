@@ -1,0 +1,8 @@
+/home/malcolm/neurovisor/ebpf-programs/target/release/deps/camino-0e02b66960a4ef71.d: /home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/lib.rs /home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/serde_impls.rs
+
+/home/malcolm/neurovisor/ebpf-programs/target/release/deps/libcamino-0e02b66960a4ef71.rlib: /home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/lib.rs /home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/serde_impls.rs
+
+/home/malcolm/neurovisor/ebpf-programs/target/release/deps/libcamino-0e02b66960a4ef71.rmeta: /home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/lib.rs /home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/serde_impls.rs
+
+/home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/lib.rs:
+/home/malcolm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/camino-1.2.2/src/serde_impls.rs:

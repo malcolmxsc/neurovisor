@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::metrics::{
     AGENT_ITERATIONS, AGENT_TASKS_TOTAL, AGENT_TOOL_CALLS_TOTAL,
     CODE_EXECUTIONS_TOTAL, CODE_EXECUTION_DURATION, MODEL_LOAD_DURATION,
+    LLM_CALL_DURATION,
 };
 
 use crate::grpc::{ExecutionClient, ExecutionError};
@@ -188,9 +189,9 @@ impl AgentController {
             iterations += 1;
 
             if iterations > self.config.max_iterations {
-                // Record max_iterations failure metric
-                AGENT_TASKS_TOTAL.with_label_values(&["max_iterations"]).inc();
-                AGENT_ITERATIONS.observe(iterations as f64);
+                // Record max_iterations failure metric with trace_id
+                AGENT_TASKS_TOTAL.with_label_values(&["max_iterations", &trace_id]).inc();
+                AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
                 return Err(AgentError::MaxIterationsReached);
             }
 
@@ -207,12 +208,19 @@ impl AgentController {
                 .await?;
 
             let call_duration_ms = call_start.elapsed().as_secs_f64() * 1000.0;
+            let call_duration_secs = call_duration_ms / 1000.0;
+
+            // Record LLM call duration with trace_id
+            LLM_CALL_DURATION
+                .with_label_values(&[&self.config.model, &trace_id])
+                .observe(call_duration_secs);
+
             if is_first_call {
                 model_load_time_ms = Some(call_duration_ms);
-                // Record model load time metric
+                // Record model load time metric with trace_id
                 MODEL_LOAD_DURATION
-                    .with_label_values(&[&self.config.model])
-                    .observe(call_duration_ms / 1000.0); // Convert to seconds
+                    .with_label_values(&[&self.config.model, &trace_id])
+                    .observe(call_duration_secs);
                 println!("[AGENT] First LLM call completed in {:.2}ms (includes model load)", call_duration_ms);
             } else {
                 println!("[AGENT] LLM call {} completed in {:.2}ms", iterations, call_duration_ms);
@@ -231,9 +239,9 @@ impl AgentController {
 
             if tool_calls.is_empty() {
                 // No tool calls - model is done
-                // Record success metrics
-                AGENT_TASKS_TOTAL.with_label_values(&["success"]).inc();
-                AGENT_ITERATIONS.observe(iterations as f64);
+                // Record success metrics with trace_id
+                AGENT_TASKS_TOTAL.with_label_values(&["success", &trace_id]).inc();
+                AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
 
                 return Ok(AgentResult {
                     final_response: response.message.content,
@@ -248,7 +256,7 @@ impl AgentController {
             for tool_call in tool_calls {
                 if tool_call.function.name == "execute_code" {
                     tool_calls_made += 1;
-                    AGENT_TOOL_CALLS_TOTAL.with_label_values(&["execute_code"]).inc();
+                    AGENT_TOOL_CALLS_TOTAL.with_label_values(&["execute_code", &trace_id]).inc();
 
                     // Parse arguments
                     let args = &tool_call.function.arguments;
@@ -368,11 +376,13 @@ impl AgentController {
         // Release VM
         self.pool.release(vm).await;
 
-        // Convert result and record metrics
+        // Convert result and record metrics with trace_id
         match result {
             Ok(streaming_result) => {
-                // Record execution metrics
-                CODE_EXECUTION_DURATION.observe(streaming_result.duration_ms / 1000.0);
+                // Record execution metrics with trace_id for correlation
+                CODE_EXECUTION_DURATION
+                    .with_label_values(&[language, trace_id])
+                    .observe(streaming_result.duration_ms / 1000.0);
                 let status = if streaming_result.timed_out {
                     "timeout"
                 } else if streaming_result.exit_code == 0 {
@@ -380,7 +390,7 @@ impl AgentController {
                 } else {
                     "error"
                 };
-                CODE_EXECUTIONS_TOTAL.with_label_values(&[language, status]).inc();
+                CODE_EXECUTIONS_TOTAL.with_label_values(&[language, status, trace_id]).inc();
 
                 Ok(ExecutionRecord {
                     language: language.to_string(),
@@ -393,7 +403,7 @@ impl AgentController {
                 })
             }
             Err(e) => {
-                CODE_EXECUTIONS_TOTAL.with_label_values(&[language, "error"]).inc();
+                CODE_EXECUTIONS_TOTAL.with_label_values(&[language, "error", trace_id]).inc();
                 Err(AgentError::ExecutionFailed(e.to_string()))
             }
         }
