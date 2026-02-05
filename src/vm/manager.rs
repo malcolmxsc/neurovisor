@@ -18,6 +18,7 @@ use uuid::Uuid;
 use super::handle::VMHandle;
 use super::{spawn_firecracker, wait_for_api_socket, to_absolute_path, FirecrackerClient};
 use crate::cgroups::{CgroupManager, ResourceLimits};
+use crate::ebpf::EbpfManager;
 use crate::metrics::VM_BOOT_DURATION;
 
 /// Configuration for the VMManager
@@ -57,6 +58,8 @@ pub struct VMManager {
     next_cid: AtomicU32,
     /// Cgroup manager for resource limits (None if cgroups unavailable)
     cgroup_manager: Option<CgroupManager>,
+    /// eBPF manager for syscall tracing (None if eBPF unavailable)
+    ebpf_manager: Option<EbpfManager>,
     /// Configuration for VMs
     config: VMManagerConfig,
 }
@@ -80,9 +83,16 @@ impl VMManager {
             }
         };
 
+        // Try to create eBPF manager for syscall tracing (graceful degradation)
+        let ebpf_manager = EbpfManager::new();
+        if ebpf_manager.is_some() {
+            crate::ebpf::metrics::set_enabled(true);
+        }
+
         Ok(Self {
             next_cid: AtomicU32::new(3), // Start at 3 (0,1,2 are reserved)
             cgroup_manager,
+            ebpf_manager,
             config,
         })
     }
@@ -130,6 +140,13 @@ impl VMManager {
                 eprintln!("[WARN] Failed to add PID {} to cgroup: {}", firecracker_pid, e);
             } else {
                 println!("[INFO]    Cgroup created for {} (PID: {})", vm_id, firecracker_pid);
+            }
+        }
+
+        // Start eBPF syscall tracing for this VM
+        if let Some(ref ebpf_mgr) = self.ebpf_manager {
+            if let Err(e) = ebpf_mgr.start_tracing(&vm_id, firecracker_pid).await {
+                eprintln!("[WARN] Failed to start eBPF tracing for {}: {}", vm_id, e);
             }
         }
 
@@ -251,7 +268,15 @@ impl VMManager {
     /// Destroy a VM and clean up all resources
     pub async fn destroy_vm(&self, mut handle: VMHandle) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let vm_id = handle.vm_id.clone();
+        let firecracker_pid = handle.pid();
         println!("[INFO] DESTROYING VM {}", vm_id);
+
+        // Stop eBPF tracing before shutdown
+        if let Some(ref ebpf_mgr) = self.ebpf_manager {
+            if let Err(e) = ebpf_mgr.stop_tracing(firecracker_pid).await {
+                eprintln!("[WARN] Failed to stop eBPF tracing for {}: {}", vm_id, e);
+            }
+        }
 
         // Shutdown the VM
         handle.shutdown().await?;

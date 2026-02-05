@@ -60,6 +60,10 @@ path = "examples/capabilities_proof.rs"
 name = "rate_limit_proof"
 path = "examples/rate_limit_proof.rs"
 
+[[example]]
+name = "ebpf_proof"
+path = "examples/ebpf_proof.rs"
+
 [dependencies]
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -95,6 +99,14 @@ lazy_static = "1.4"                           # Global metric registry
 # Security & Sandboxing
 seccompiler = "0.4"                           # Seccomp BPF filter (same as Firecracker uses)
 caps = "0.5"                                  # Linux capabilities (drop/raise)
+
+# eBPF (optional - requires kernel support and CAP_BPF)
+aya = { version = "0.12", optional = true }
+aya-log = { version = "0.2", optional = true }
+
+[features]
+default = []
+ebpf = ["aya", "aya-log"]
 
 [build-dependencies]
 tonic-build = "0.12"

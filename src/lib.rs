@@ -11,6 +11,7 @@
 //! - `cgroups` - Resource isolation using Linux cgroups v2
 //! - `metrics` - Prometheus metrics for observability
 //! - `security` - Seccomp filters and capability dropping
+//! - `ebpf` - eBPF-based syscall tracing (optional, requires `--features ebpf`)
 //!
 //! # Quick Start
 //!
@@ -26,6 +27,7 @@
 
 pub mod agent;
 pub mod cgroups;
+pub mod ebpf;
 pub mod grpc;
 pub mod metrics;
 pub mod ollama;

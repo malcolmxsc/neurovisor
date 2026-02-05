@@ -1,0 +1,20 @@
+[package]
+name = "neurovisor-ebpf"
+version = "0.1.0"
+edition = "2021"
+description = "eBPF programs for NeuroVisor syscall tracing and security"
+
+[dependencies]
+aya-ebpf = "0.1"
+aya-log-ebpf = "0.1"
+
+[[bin]]
+name = "syscall-trace"
+path = "src/syscall_trace.rs"
+
+[profile.dev]
+opt-level = 3
+debug = false
+
+[profile.release]
+lto = true

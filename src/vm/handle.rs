@@ -98,6 +98,11 @@ impl VMHandle {
         self.created_at.elapsed()
     }
 
+    /// Get the Firecracker process ID
+    pub fn pid(&self) -> u32 {
+        self.process.id()
+    }
+
     /// Graceful shutdown: send shutdown command via Firecracker API, then cleanup
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.status = VMStatus::Stopping;
