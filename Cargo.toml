@@ -64,6 +64,10 @@ path = "examples/rate_limit_proof.rs"
 name = "ebpf_proof"
 path = "examples/ebpf_proof.rs"
 
+[[example]]
+name = "lsm_proof"
+path = "examples/lsm_proof.rs"
+
 [dependencies]
 # Async Runtime
 tokio = { version = "1", features = ["full"] }

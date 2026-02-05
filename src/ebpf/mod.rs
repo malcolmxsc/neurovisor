@@ -1,6 +1,10 @@
 //! eBPF-based observability and security for NeuroVisor
 //!
-//! This module provides kernel-level tracing of VM syscalls using eBPF.
+//! This module provides kernel-level tracing and security enforcement using eBPF:
+//!
+//! - **Observability**: Syscall tracing via tracepoints
+//! - **Security**: File access control via LSM hooks
+//!
 //! It integrates with the existing Prometheus metrics infrastructure to
 //! expose syscall counts, process executions, and file access patterns.
 //!
@@ -65,9 +69,11 @@
 #[cfg(feature = "ebpf")]
 mod loader;
 pub mod metrics;
+pub mod security;
 
 #[cfg(feature = "ebpf")]
 pub use loader::{EbpfError, EbpfManager};
+pub use security::{LsmManager, SecurityPolicy};
 
 /// Stub EbpfManager for when eBPF feature is disabled.
 ///

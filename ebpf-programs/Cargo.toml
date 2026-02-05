@@ -12,6 +12,10 @@ aya-log-ebpf = "0.1"
 name = "syscall-trace"
 path = "src/syscall_trace.rs"
 
+[[bin]]
+name = "lsm-file-open"
+path = "src/lsm_file_open.rs"
+
 [profile.dev]
 opt-level = 3
 debug = false
