@@ -313,10 +313,10 @@ impl AgentController {
         code: &str,
         trace_id: &str,
     ) -> Result<ExecutionRecord, AgentError> {
-        // Acquire VM from pool
+        // Acquire VM from pool with trace correlation
         let vm = self
             .pool
-            .acquire()
+            .acquire(Some(trace_id))
             .await
             .map_err(|e| AgentError::VmAcquisitionFailed(e.to_string()))?;
 

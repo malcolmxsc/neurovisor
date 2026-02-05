@@ -77,6 +77,13 @@ impl InferenceService for GatewayServer {
         // Start timing for gRPC duration
         let start = std::time::Instant::now();
 
+        // Extract trace_id from gRPC metadata (supports x-trace-id header)
+        let incoming_trace_id = request
+            .metadata()
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         let req = request.into_inner();
         let prompt = req.prompt;
         let model = if req.model.is_empty() {
@@ -90,8 +97,11 @@ impl InferenceService for GatewayServer {
         REQUESTS_IN_FLIGHT.inc();
         REQUEST_SIZE_BYTES.observe(prompt.len() as f64);
 
-        // Acquire a VM from the pool
-        let vm = match self.pool.acquire().await {
+        // Use incoming trace_id from metadata or generate a new one
+        let trace_id = incoming_trace_id.unwrap_or_else(|| Uuid::now_v7().to_string());
+
+        // Acquire a VM from the pool with trace correlation
+        let vm = match self.pool.acquire(Some(&trace_id)).await {
             Ok(v) => v,
             Err(e) => {
                 ERRORS_TOTAL.with_label_values(&["no_vm_available"]).inc();
@@ -102,10 +112,7 @@ impl InferenceService for GatewayServer {
         };
 
         let vm_id = vm.vm_id.clone();
-        println!("[INFO] Request using VM {} (CID: {})", vm_id, vm.cid);
-
-        // Generate a unique trace ID for this request
-        let trace_id = Uuid::now_v7().to_string();
+        println!("[INFO] Request using VM {} (CID: {}, trace: {})", vm_id, vm.cid, trace_id);
 
         // Execute inference
         let mut token_stream = match self.ollama.generate_stream(&prompt, &model, Some(&trace_id)).await {
@@ -227,6 +234,13 @@ impl InferenceService for GatewayServer {
         // Start timing for gRPC duration
         let start = std::time::Instant::now();
 
+        // Extract trace_id from gRPC metadata (supports x-trace-id header)
+        let incoming_trace_id = request
+            .metadata()
+            .get("x-trace-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         let req = request.into_inner();
         let prompt = req.prompt;
         let model = if req.model.is_empty() {
@@ -240,8 +254,11 @@ impl InferenceService for GatewayServer {
         REQUESTS_IN_FLIGHT.inc();
         REQUEST_SIZE_BYTES.observe(prompt.len() as f64);
 
-        // Acquire a VM from the pool
-        let vm = match self.pool.acquire().await {
+        // Use incoming trace_id from metadata or generate a new one
+        let trace_id = incoming_trace_id.unwrap_or_else(|| Uuid::now_v7().to_string());
+
+        // Acquire a VM from the pool with trace correlation
+        let vm = match self.pool.acquire(Some(&trace_id)).await {
             Ok(v) => v,
             Err(e) => {
                 ERRORS_TOTAL.with_label_values(&["no_vm_available"]).inc();
@@ -252,10 +269,7 @@ impl InferenceService for GatewayServer {
         };
 
         let vm_id = vm.vm_id.clone();
-        println!("[INFO] Request using VM {} (CID: {})", vm_id, vm.cid);
-
-        // Generate trace ID for this request
-        let trace_id = Uuid::now_v7().to_string();
+        println!("[INFO] Request using VM {} (CID: {}, trace: {})", vm_id, vm.cid, trace_id);
 
         // Execute inference
         let result = match self.ollama.generate(&prompt, &model, Some(&trace_id)).await {

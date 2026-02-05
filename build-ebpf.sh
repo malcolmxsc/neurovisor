@@ -48,7 +48,7 @@ echo "Copying eBPF objects to $OUTPUT_DIR..."
 if [ -d "target/bpfel-unknown-none/release" ]; then
     cp target/bpfel-unknown-none/release/*.o "$OUTPUT_DIR/" 2>/dev/null || true
     # For binary targets, copy the executables (they are also ELF BPF objects)
-    for bin in target/bpfel-unknown-none/release/syscall-trace; do
+    for bin in target/bpfel-unknown-none/release/syscall-trace target/bpfel-unknown-none/release/lsm-file-open target/bpfel-unknown-none/release/span-trace; do
         if [ -f "$bin" ]; then
             cp "$bin" "$OUTPUT_DIR/$(basename $bin).o"
         fi

@@ -70,10 +70,12 @@
 mod loader;
 pub mod metrics;
 pub mod security;
+pub mod tracing;
 
 #[cfg(feature = "ebpf")]
 pub use loader::{EbpfError, EbpfManager};
 pub use security::{LsmManager, SecurityPolicy};
+pub use tracing::TraceManager;
 
 /// Stub EbpfManager for when eBPF feature is disabled.
 ///

@@ -112,7 +112,10 @@ impl VMPool {
     ///
     /// Returns a pre-warmed VM ready for use. If the pool is empty,
     /// returns an error (caller should retry or wait).
-    pub async fn acquire(&self) -> Result<VMHandle, Box<dyn std::error::Error + Send + Sync>> {
+    ///
+    /// # Arguments
+    /// * `trace_id` - Optional trace ID for distributed tracing correlation
+    pub async fn acquire(&self, trace_id: Option<&str>) -> Result<VMHandle, Box<dyn std::error::Error + Send + Sync>> {
         let start = Instant::now();
 
         // Check if we're at max capacity
@@ -139,6 +142,13 @@ impl VMPool {
             }
         };
 
+        // Start distributed tracing if trace_id provided
+        if let Some(tid) = trace_id {
+            if let Err(e) = self.manager.start_trace(&handle, tid).await {
+                eprintln!("[WARN] Failed to start trace for {}: {}", handle.vm_id, e);
+            }
+        }
+
         // Increment active count
         {
             let mut active = self.active_count.lock().await;
@@ -160,6 +170,11 @@ impl VMPool {
     /// The pool replenisher will create new warm VMs to replace them.
     pub async fn release(&self, handle: VMHandle) {
         let vm_id = handle.vm_id.clone();
+
+        // Stop distributed tracing before destruction
+        if let Err(e) = self.manager.stop_trace(&handle).await {
+            eprintln!("[WARN] Failed to stop trace for {}: {}", vm_id, e);
+        }
 
         // Decrement active count
         {

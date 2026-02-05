@@ -21,8 +21,8 @@
 //! // Create a VM pool with medium-sized VMs
 //! let pool = VMPool::new(VMSize::Medium.limits()).await?;
 //!
-//! // Acquire a VM for code execution
-//! let vm = pool.acquire().await?;
+//! // Acquire a VM for code execution (with optional trace_id for distributed tracing)
+//! let vm = pool.acquire(None).await?;
 //! ```
 
 pub mod agent;

@@ -18,7 +18,7 @@ use uuid::Uuid;
 use super::handle::VMHandle;
 use super::{spawn_firecracker, wait_for_api_socket, to_absolute_path, FirecrackerClient};
 use crate::cgroups::{CgroupManager, ResourceLimits};
-use crate::ebpf::EbpfManager;
+use crate::ebpf::{EbpfManager, TraceManager};
 use crate::metrics::VM_BOOT_DURATION;
 
 /// Configuration for the VMManager
@@ -60,6 +60,8 @@ pub struct VMManager {
     cgroup_manager: Option<CgroupManager>,
     /// eBPF manager for syscall tracing (None if eBPF unavailable)
     ebpf_manager: Option<EbpfManager>,
+    /// Trace manager for distributed tracing (None if unavailable)
+    trace_manager: Option<TraceManager>,
     /// Configuration for VMs
     config: VMManagerConfig,
 }
@@ -89,10 +91,14 @@ impl VMManager {
             crate::ebpf::metrics::set_enabled(true);
         }
 
+        // Try to create trace manager for distributed tracing (graceful degradation)
+        let trace_manager = TraceManager::new();
+
         Ok(Self {
             next_cid: AtomicU32::new(3), // Start at 3 (0,1,2 are reserved)
             cgroup_manager,
             ebpf_manager,
+            trace_manager,
             config,
         })
     }
@@ -300,5 +306,35 @@ impl VMManager {
     /// Check if using snapshot boot
     pub fn uses_snapshot(&self) -> bool {
         self.config.snapshot_path.is_some() && self.config.mem_path.is_some()
+    }
+
+    /// Start distributed tracing for a VM
+    ///
+    /// Associates a trace_id with the Firecracker process PID so that
+    /// eBPF events from this VM can be correlated with the request trace.
+    pub async fn start_trace(&self, handle: &VMHandle, trace_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(ref trace_mgr) = self.trace_manager {
+            let pid = handle.pid();
+            trace_mgr.start_trace(pid, trace_id).await.map_err(|e| {
+                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    as Box<dyn std::error::Error + Send + Sync>
+            })?;
+            println!("[INFO]    Trace started for {} (trace_id: {})", handle.vm_id, trace_id);
+        }
+        Ok(())
+    }
+
+    /// Stop distributed tracing for a VM
+    ///
+    /// Removes the trace_id association before VM destruction.
+    pub async fn stop_trace(&self, handle: &VMHandle) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(ref trace_mgr) = self.trace_manager {
+            let pid = handle.pid();
+            trace_mgr.stop_trace(pid).await.map_err(|e| {
+                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    as Box<dyn std::error::Error + Send + Sync>
+            })?;
+        }
+        Ok(())
     }
 }

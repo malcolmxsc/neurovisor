@@ -3,7 +3,7 @@
 //! These metrics are populated from eBPF map data collected by the EbpfManager.
 
 use lazy_static::lazy_static;
-use prometheus::{register_counter_vec, register_gauge, CounterVec, Gauge};
+use prometheus::{register_counter_vec, register_gauge, register_histogram_vec, CounterVec, Gauge, HistogramVec};
 
 lazy_static! {
     // ─────────────────────────────────────────────────────────────────────────────
@@ -58,6 +58,38 @@ lazy_static! {
         "neurovisor_ebpf_lsm_blocked_total_count",
         "Total file access attempts blocked by eBPF LSM"
     ).expect("failed to register EBPF_LSM_BLOCKED_TOTAL metric");
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Distributed Tracing Metrics
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Span events collected via eBPF tracing.
+    ///
+    /// Labels:
+    /// - event_type: "exec", "exit", or "syscall"
+    /// - comm: Process name (e.g., "firecracker", "python")
+    pub static ref EBPF_TRACE_SPANS: CounterVec = register_counter_vec!(
+        "neurovisor_ebpf_trace_spans_total",
+        "Span events collected via eBPF distributed tracing",
+        &["event_type", "comm"]
+    ).expect("failed to register EBPF_TRACE_SPANS metric");
+
+    /// Process lifetime duration from exec to exit.
+    ///
+    /// Labels:
+    /// - comm: Process name
+    pub static ref EBPF_TRACE_DURATION: HistogramVec = register_histogram_vec!(
+        "neurovisor_ebpf_trace_duration_seconds",
+        "Process lifetime duration from exec to exit",
+        &["comm"],
+        vec![0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0]
+    ).expect("failed to register EBPF_TRACE_DURATION metric");
+
+    /// Number of processes currently being traced with trace IDs.
+    pub static ref EBPF_TRACED_PROCESSES: Gauge = register_gauge!(
+        "neurovisor_ebpf_traced_processes",
+        "Number of processes currently being traced with trace IDs"
+    ).expect("failed to register EBPF_TRACED_PROCESSES metric");
 
     // ─────────────────────────────────────────────────────────────────────────────
     // eBPF System Metrics

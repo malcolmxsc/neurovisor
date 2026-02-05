@@ -16,6 +16,10 @@ path = "src/syscall_trace.rs"
 name = "lsm-file-open"
 path = "src/lsm_file_open.rs"
 
+[[bin]]
+name = "span-trace"
+path = "src/span_trace.rs"
+
 [profile.dev]
 opt-level = 3
 debug = false
