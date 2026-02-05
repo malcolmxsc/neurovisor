@@ -9,6 +9,11 @@ use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::metrics::{
+    // Aggregate metrics (persistent, for dashboards)
+    AGENT_TASKS, AGENT_ITERATIONS_TOTAL, AGENT_TOOL_CALLS,
+    CODE_EXECUTIONS, CODE_EXECUTION_DURATION_TOTAL, MODEL_LOAD_TIME,
+    LLM_CALL_TIME,
+    // Per-trace metrics (ephemeral, for correlation/debugging)
     AGENT_ITERATIONS, AGENT_TASKS_TOTAL, AGENT_TOOL_CALLS_TOTAL,
     CODE_EXECUTIONS_TOTAL, CODE_EXECUTION_DURATION, MODEL_LOAD_DURATION,
     LLM_CALL_DURATION,
@@ -203,6 +208,10 @@ impl AgentController {
 
                 if iterations > self.config.max_iterations {
                     warn!(trace_id = %trace_id, iterations, "Max iterations reached");
+                    // Aggregate metrics (persistent)
+                    AGENT_TASKS.with_label_values(&["max_iterations"]).inc();
+                    AGENT_ITERATIONS_TOTAL.observe(iterations as f64);
+                    // Per-trace metrics (for correlation)
                     AGENT_TASKS_TOTAL.with_label_values(&["max_iterations", &trace_id]).inc();
                     AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
                     return Err(AgentError::MaxIterationsReached);
@@ -233,16 +242,15 @@ impl AgentController {
                 let call_duration_ms = call_start.elapsed().as_secs_f64() * 1000.0;
                 let call_duration_secs = call_duration_ms / 1000.0;
 
-                // Record LLM call duration with trace_id
-                LLM_CALL_DURATION
-                    .with_label_values(&[&self.config.model, &trace_id])
-                    .observe(call_duration_secs);
+                // Record LLM call duration - aggregate and per-trace
+                LLM_CALL_TIME.with_label_values(&[&self.config.model]).observe(call_duration_secs);
+                LLM_CALL_DURATION.with_label_values(&[&self.config.model, &trace_id]).observe(call_duration_secs);
 
                 if is_first_call {
                     model_load_time_ms = Some(call_duration_ms);
-                    MODEL_LOAD_DURATION
-                        .with_label_values(&[&self.config.model, &trace_id])
-                        .observe(call_duration_secs);
+                    // Aggregate and per-trace model load metrics
+                    MODEL_LOAD_TIME.with_label_values(&[&self.config.model]).observe(call_duration_secs);
+                    MODEL_LOAD_DURATION.with_label_values(&[&self.config.model, &trace_id]).observe(call_duration_secs);
                     info!(trace_id = %trace_id, duration_ms = call_duration_ms, "Model loaded");
                     println!("[AGENT] First LLM call completed in {:.2}ms (includes model load)", call_duration_ms);
                 } else {
@@ -264,6 +272,10 @@ impl AgentController {
                 if tool_calls.is_empty() {
                     // No tool calls - model is done
                     info!(trace_id = %trace_id, iterations, tool_calls = tool_calls_made, "Agent task completed");
+                    // Aggregate metrics (persistent)
+                    AGENT_TASKS.with_label_values(&["success"]).inc();
+                    AGENT_ITERATIONS_TOTAL.observe(iterations as f64);
+                    // Per-trace metrics (for correlation)
                     AGENT_TASKS_TOTAL.with_label_values(&["success", &trace_id]).inc();
                     AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
 
@@ -280,6 +292,8 @@ impl AgentController {
                 for tool_call in tool_calls {
                     if tool_call.function.name == "execute_code" {
                         tool_calls_made += 1;
+                        // Aggregate and per-trace tool call metrics
+                        AGENT_TOOL_CALLS.with_label_values(&["execute_code"]).inc();
                         AGENT_TOOL_CALLS_TOTAL.with_label_values(&["execute_code", &trace_id]).inc();
 
                         // Parse arguments
@@ -426,10 +440,7 @@ impl AgentController {
         // Convert result and record metrics with trace_id
         match result {
             Ok(streaming_result) => {
-                // Record execution metrics with trace_id for correlation
-                CODE_EXECUTION_DURATION
-                    .with_label_values(&[language, trace_id])
-                    .observe(streaming_result.duration_ms / 1000.0);
+                let duration_secs = streaming_result.duration_ms / 1000.0;
                 let status = if streaming_result.timed_out {
                     "timeout"
                 } else if streaming_result.exit_code == 0 {
@@ -437,6 +448,11 @@ impl AgentController {
                 } else {
                     "error"
                 };
+                // Aggregate metrics (persistent)
+                CODE_EXECUTION_DURATION_TOTAL.with_label_values(&[language]).observe(duration_secs);
+                CODE_EXECUTIONS.with_label_values(&[language, status]).inc();
+                // Per-trace metrics (for correlation)
+                CODE_EXECUTION_DURATION.with_label_values(&[language, trace_id]).observe(duration_secs);
                 CODE_EXECUTIONS_TOTAL.with_label_values(&[language, status, trace_id]).inc();
 
                 Ok(ExecutionRecord {
@@ -450,6 +466,8 @@ impl AgentController {
                 })
             }
             Err(e) => {
+                // Aggregate and per-trace error metrics
+                CODE_EXECUTIONS.with_label_values(&[language, "error"]).inc();
                 CODE_EXECUTIONS_TOTAL.with_label_values(&[language, "error", trace_id]).inc();
                 Err(AgentError::ExecutionFailed(e.to_string()))
             }

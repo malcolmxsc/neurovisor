@@ -145,66 +145,131 @@ lazy_static! {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Agent Metrics (with trace_id for correlation)
+// Agent Metrics - Aggregate (persistent, for dashboards)
 // ─────────────────────────────────────────────────────────────────────────────
 
 lazy_static! {
-    /// Total agent tasks started
+    /// Total agent tasks (aggregate - persists across restarts)
+    /// Labels: status
+    pub static ref AGENT_TASKS: CounterVec = register_counter_vec!(
+        "neurovisor_agent_tasks",
+        "Total number of agent tasks",
+        &["status"]  // status: "success", "error", "max_iterations"
+    ).unwrap();
+
+    /// Number of iterations per agent task (aggregate)
+    pub static ref AGENT_ITERATIONS_TOTAL: Histogram = register_histogram!(
+        "neurovisor_agent_iterations_total",
+        "Number of iterations per agent task",
+        vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
+    ).unwrap();
+
+    /// Code execution duration in VM (aggregate)
+    /// Labels: language
+    pub static ref CODE_EXECUTION_DURATION_TOTAL: HistogramVec = register_histogram_vec!(
+        "neurovisor_code_execution_duration_seconds",
+        "Duration of code execution in VM",
+        &["language"],
+        vec![0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
+    ).unwrap();
+
+    /// Total code executions (aggregate)
+    /// Labels: language, status
+    pub static ref CODE_EXECUTIONS: CounterVec = register_counter_vec!(
+        "neurovisor_code_executions",
+        "Total code executions",
+        &["language", "status"]  // status: "success", "error", "timeout"
+    ).unwrap();
+
+    /// LLM model load time (aggregate)
+    /// Labels: model
+    pub static ref MODEL_LOAD_TIME: HistogramVec = register_histogram_vec!(
+        "neurovisor_model_load_duration_seconds",
+        "Time for first LLM call (includes model loading)",
+        &["model"],
+        vec![1.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0]
+    ).unwrap();
+
+    /// Total tool calls made by agent (aggregate)
+    /// Labels: tool
+    pub static ref AGENT_TOOL_CALLS: CounterVec = register_counter_vec!(
+        "neurovisor_agent_tool_calls",
+        "Total tool calls made by agent",
+        &["tool"]  // tool: "execute_code"
+    ).unwrap();
+
+    /// LLM call duration (aggregate)
+    /// Labels: model
+    pub static ref LLM_CALL_TIME: HistogramVec = register_histogram_vec!(
+        "neurovisor_llm_call_duration_seconds",
+        "Duration of each LLM call",
+        &["model"],
+        vec![0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0]
+    ).unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Metrics - Per-trace (for correlation/debugging, ephemeral)
+// Use Pushgateway or query within session for trace-level detail
+// ─────────────────────────────────────────────────────────────────────────────
+
+lazy_static! {
+    /// Total agent tasks started (with trace_id for correlation)
     /// Labels: status, trace_id
     pub static ref AGENT_TASKS_TOTAL: CounterVec = register_counter_vec!(
         "neurovisor_agent_tasks_total",
-        "Total number of agent tasks started",
+        "Total number of agent tasks started (per-trace)",
         &["status", "trace_id"]  // status: "success", "error", "max_iterations"
     ).unwrap();
 
-    /// Number of iterations per agent task
+    /// Number of iterations per agent task (with trace_id)
     /// Labels: trace_id
     pub static ref AGENT_ITERATIONS: HistogramVec = register_histogram_vec!(
         "neurovisor_agent_iterations",
-        "Number of iterations per agent task",
+        "Number of iterations per agent task (per-trace)",
         &["trace_id"],
         vec![1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 15.0, 20.0]
     ).unwrap();
 
-    /// Code execution duration in VM
+    /// Code execution duration in VM (with trace_id)
     /// Labels: language, trace_id
     pub static ref CODE_EXECUTION_DURATION: HistogramVec = register_histogram_vec!(
         "neurovisor_code_execution_seconds",
-        "Duration of code execution in VM",
+        "Duration of code execution in VM (per-trace)",
         &["language", "trace_id"],
         vec![0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
     ).unwrap();
 
-    /// Total code executions
+    /// Total code executions (with trace_id)
     /// Labels: language, status, trace_id
     pub static ref CODE_EXECUTIONS_TOTAL: CounterVec = register_counter_vec!(
         "neurovisor_code_executions_total",
-        "Total code executions",
+        "Total code executions (per-trace)",
         &["language", "status", "trace_id"]  // status: "success", "error", "timeout"
     ).unwrap();
 
-    /// LLM model load time (first call includes loading model into memory)
+    /// LLM model load time (with trace_id)
     /// Labels: model, trace_id
     pub static ref MODEL_LOAD_DURATION: HistogramVec = register_histogram_vec!(
         "neurovisor_model_load_seconds",
-        "Time for first LLM call (includes model loading)",
+        "Time for first LLM call (per-trace)",
         &["model", "trace_id"],
         vec![1.0, 5.0, 10.0, 30.0, 60.0, 90.0, 120.0, 180.0, 300.0]
     ).unwrap();
 
-    /// Total tool calls made by agent
+    /// Total tool calls made by agent (with trace_id)
     /// Labels: tool, trace_id
     pub static ref AGENT_TOOL_CALLS_TOTAL: CounterVec = register_counter_vec!(
         "neurovisor_agent_tool_calls_total",
-        "Total tool calls made by agent",
+        "Total tool calls made by agent (per-trace)",
         &["tool", "trace_id"]  // tool: "execute_code"
     ).unwrap();
 
-    /// LLM call duration (each iteration)
-    /// Labels: model, iteration, trace_id
+    /// LLM call duration (with trace_id)
+    /// Labels: model, trace_id
     pub static ref LLM_CALL_DURATION: HistogramVec = register_histogram_vec!(
         "neurovisor_llm_call_seconds",
-        "Duration of each LLM call",
+        "Duration of each LLM call (per-trace)",
         &["model", "trace_id"],
         vec![0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0]
     ).unwrap();

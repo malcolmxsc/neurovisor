@@ -193,6 +193,7 @@ dependencies = [
  "log",
  "object 0.32.2",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -1080,8 +1081,10 @@ dependencies = [
  "async-stream",
  "aya 0.12.0",
  "aya-log",
+ "bytes",
  "caps",
  "futures-util",
+ "hex",
  "http-body-util",
  "hyper 1.8.1",
  "hyper-util",

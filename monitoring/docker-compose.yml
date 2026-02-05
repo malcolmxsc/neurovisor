@@ -3,8 +3,9 @@ services:
   # Tempo - Distributed Tracing
   # ─────────────────────────────────────────────────────────────────────────────
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.5.0
     container_name: neurovisor-tempo
+    user: root
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
