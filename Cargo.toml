@@ -100,6 +100,14 @@ uuid = { version = "1", features = ["v7"] }  # v7 = timestamp + random (time-sor
 prometheus = "0.13"                           # Metrics collection
 lazy_static = "1.4"                           # Global metric registry
 
+# OpenTelemetry (distributed tracing)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.22"
+opentelemetry = "0.21"
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic"] }
+
 # Security & Sandboxing
 seccompiler = "0.4"                           # Seccomp BPF filter (same as Firecracker uses)
 caps = "0.5"                                  # Linux capabilities (drop/raise)

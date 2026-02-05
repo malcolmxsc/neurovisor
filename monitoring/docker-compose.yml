@@ -1,25 +1,60 @@
 services:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Tempo - Distributed Tracing
+  # ─────────────────────────────────────────────────────────────────────────────
+  tempo:
+    image: grafana/tempo:latest
+    container_name: neurovisor-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/tmp/tempo
+    ports:
+      - "3200:3200"   # Tempo API
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Loki - Log Aggregation
+  # ─────────────────────────────────────────────────────────────────────────────
+  loki:
+    image: grafana/loki:latest
+    container_name: neurovisor-loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Prometheus - Metrics
+  # ─────────────────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:latest
     container_name: neurovisor-prometheus
-    ports:
-      - "9091:9090"
-    volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
+      - '--enable-feature=exemplar-storage'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9091:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Grafana - Visualization
+  # ─────────────────────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:latest
     container_name: neurovisor-grafana
-    ports:
-      - "3000:3000"
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana_data:/var/lib/grafana
@@ -27,10 +62,37 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=neurovisor
       - GF_USERS_ALLOW_SIGN_UP=false
-    restart: unless-stopped
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    ports:
+      - "3000:3000"
     depends_on:
       - prometheus
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # OpenTelemetry Collector - Receives and routes telemetry
+  # ─────────────────────────────────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: neurovisor-otel
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./otel/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    ports:
+      - "4316:4317"   # OTLP gRPC (host-facing)
+      - "4319:4318"   # OTLP HTTP (host-facing)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+    restart: unless-stopped
 
 volumes:
   prometheus_data:
   grafana_data:
+  tempo_data:
+  loki_data:

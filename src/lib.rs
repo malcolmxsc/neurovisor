@@ -32,6 +32,7 @@ pub mod grpc;
 pub mod metrics;
 pub mod ollama;
 pub mod security;
+pub mod tracing;
 pub mod vm;
 
 // Re-export commonly used types at crate root for convenience

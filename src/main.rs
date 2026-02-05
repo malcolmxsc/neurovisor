@@ -85,6 +85,8 @@ struct Args {
     model: String,
     /// Pushgateway URL for pushing metrics before exit (agent mode)
     pushgateway: Option<String>,
+    /// OTLP endpoint for distributed tracing (default: http://localhost:4316)
+    otlp_endpoint: Option<String>,
 }
 
 fn parse_args() -> Args {
@@ -132,6 +134,12 @@ fn parse_args() -> Args {
         .and_then(|i| args.get(i + 1))
         .map(|s| s.to_string());
 
+    let otlp_endpoint = args
+        .iter()
+        .position(|a| a == "--otlp")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.to_string());
+
     Args {
         use_snapshot,
         warm_size,
@@ -140,6 +148,7 @@ fn parse_args() -> Args {
         agent_task,
         model,
         pushgateway,
+        otlp_endpoint,
     }
 }
 
@@ -206,7 +215,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // AGENT MODE - Run a single task and exit
     // ─────────────────────────────────────────────────────────────────────────
     if let Some(task) = args.agent_task {
-        return run_agent_mode(task, Arc::clone(&pool), args.model, args.pushgateway).await;
+        return run_agent_mode(
+            task,
+            Arc::clone(&pool),
+            args.model,
+            args.pushgateway,
+            args.otlp_endpoint,
+        ).await;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -350,7 +365,17 @@ async fn run_agent_mode(
     pool: Arc<VMPool>,
     model: String,
     pushgateway: Option<String>,
+    otlp_endpoint: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Initialize OpenTelemetry tracing
+    if let Err(e) = neurovisor::tracing::init_tracing("neurovisor", otlp_endpoint.as_deref()) {
+        eprintln!("[WARN] Failed to initialize tracing: {}", e);
+        eprintln!("[WARN] Traces will not be exported to Tempo");
+    } else {
+        println!("[INFO] ✅ TRACING INITIALIZED (OTLP endpoint: {})",
+            otlp_endpoint.as_deref().unwrap_or("http://localhost:4316"));
+    }
+
     println!();
     println!("╔════════════════════════════════════════════════════════════════╗");
     println!("║                    NEUROVISOR AGENT MODE                       ║");
@@ -429,6 +454,11 @@ async fn run_agent_mode(
     // Cleanup
     println!("[INFO] Shutting down VM pool...");
     pool.shutdown().await;
+
+    // Flush traces before exiting
+    println!("[INFO] Flushing traces...");
+    neurovisor::tracing::shutdown_tracing();
+
     println!("[INFO] ✅ AGENT MODE COMPLETE");
 
     Ok(())

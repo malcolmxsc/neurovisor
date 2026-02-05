@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use tracing::{info, info_span, warn, Instrument};
 use uuid::Uuid;
 
 use crate::metrics::{
@@ -162,69 +163,92 @@ impl AgentController {
     /// AgentResult containing the final response and execution history
     pub async fn run(&self, task: &str) -> Result<AgentResult, AgentError> {
         let trace_id = Uuid::now_v7().to_string();
-        println!("[AGENT] Trace ID: {}", trace_id);
 
-        let tools = vec![ChatClient::execute_code_tool()];
+        // Create root span for the entire agent task
+        let root_span = info_span!(
+            "agent_task",
+            trace_id = %trace_id,
+            task = %task,
+            model = %self.config.model,
+            otel.name = "agent_task"
+        );
 
-        // Initialize conversation
-        let mut messages = vec![];
+        async {
+            info!(trace_id = %trace_id, task = %task, "Starting agent task");
+            println!("[AGENT] Trace ID: {}", trace_id);
 
-        // Add system prompt
-        let system_prompt = self
-            .config
-            .system_prompt
-            .clone()
-            .unwrap_or_else(|| DEFAULT_AGENT_SYSTEM_PROMPT.to_string());
-        messages.push(ChatMessage::system(system_prompt));
+            let tools = vec![ChatClient::execute_code_tool()];
 
-        // Add user task
-        messages.push(ChatMessage::user(task));
+            // Initialize conversation
+            let mut messages = vec![];
 
-        let mut iterations = 0;
-        let mut tool_calls_made = 0;
-        let mut execution_records = vec![];
-        let mut model_load_time_ms: Option<f64> = None;
+            // Add system prompt
+            let system_prompt = self
+                .config
+                .system_prompt
+                .clone()
+                .unwrap_or_else(|| DEFAULT_AGENT_SYSTEM_PROMPT.to_string());
+            messages.push(ChatMessage::system(system_prompt));
 
-        loop {
-            iterations += 1;
+            // Add user task
+            messages.push(ChatMessage::user(task));
 
-            if iterations > self.config.max_iterations {
-                // Record max_iterations failure metric with trace_id
-                AGENT_TASKS_TOTAL.with_label_values(&["max_iterations", &trace_id]).inc();
-                AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
-                return Err(AgentError::MaxIterationsReached);
-            }
+            let mut iterations = 0;
+            let mut tool_calls_made = 0;
+            let mut execution_records = vec![];
+            let mut model_load_time_ms: Option<f64> = None;
 
-            // Call Ollama with tools (track timing, especially for first call which includes model load)
-            let is_first_call = iterations == 1;
-            if is_first_call {
-                println!("[AGENT] Calling {} (first call includes model load time)...", self.config.model);
-            }
-            let call_start = std::time::Instant::now();
+            loop {
+                iterations += 1;
 
-            let response = self
-                .chat_client
-                .chat(messages.clone(), &self.config.model, Some(tools.clone()))
-                .await?;
+                if iterations > self.config.max_iterations {
+                    warn!(trace_id = %trace_id, iterations, "Max iterations reached");
+                    AGENT_TASKS_TOTAL.with_label_values(&["max_iterations", &trace_id]).inc();
+                    AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
+                    return Err(AgentError::MaxIterationsReached);
+                }
 
-            let call_duration_ms = call_start.elapsed().as_secs_f64() * 1000.0;
-            let call_duration_secs = call_duration_ms / 1000.0;
+                // Create span for LLM call
+                let llm_span = info_span!(
+                    "llm_call",
+                    trace_id = %trace_id,
+                    iteration = iterations,
+                    model = %self.config.model,
+                    otel.name = "llm_call"
+                );
 
-            // Record LLM call duration with trace_id
-            LLM_CALL_DURATION
-                .with_label_values(&[&self.config.model, &trace_id])
-                .observe(call_duration_secs);
+                let is_first_call = iterations == 1;
+                if is_first_call {
+                    info!(trace_id = %trace_id, model = %self.config.model, "First LLM call (includes model load)");
+                    println!("[AGENT] Calling {} (first call includes model load time)...", self.config.model);
+                }
+                let call_start = std::time::Instant::now();
 
-            if is_first_call {
-                model_load_time_ms = Some(call_duration_ms);
-                // Record model load time metric with trace_id
-                MODEL_LOAD_DURATION
+                let response = self
+                    .chat_client
+                    .chat(messages.clone(), &self.config.model, Some(tools.clone()))
+                    .instrument(llm_span)
+                    .await?;
+
+                let call_duration_ms = call_start.elapsed().as_secs_f64() * 1000.0;
+                let call_duration_secs = call_duration_ms / 1000.0;
+
+                // Record LLM call duration with trace_id
+                LLM_CALL_DURATION
                     .with_label_values(&[&self.config.model, &trace_id])
                     .observe(call_duration_secs);
-                println!("[AGENT] First LLM call completed in {:.2}ms (includes model load)", call_duration_ms);
-            } else {
-                println!("[AGENT] LLM call {} completed in {:.2}ms", iterations, call_duration_ms);
-            }
+
+                if is_first_call {
+                    model_load_time_ms = Some(call_duration_ms);
+                    MODEL_LOAD_DURATION
+                        .with_label_values(&[&self.config.model, &trace_id])
+                        .observe(call_duration_secs);
+                    info!(trace_id = %trace_id, duration_ms = call_duration_ms, "Model loaded");
+                    println!("[AGENT] First LLM call completed in {:.2}ms (includes model load)", call_duration_ms);
+                } else {
+                    info!(trace_id = %trace_id, iteration = iterations, duration_ms = call_duration_ms, "LLM call completed");
+                    println!("[AGENT] LLM call {} completed in {:.2}ms", iterations, call_duration_ms);
+                }
 
             // Add assistant response to history
             messages.push(response.message.clone());
@@ -237,78 +261,101 @@ impl AgentController {
                 .filter(|tc| !tc.is_empty())
                 .unwrap_or_else(|| parse_tool_calls_from_text(&response.message.content));
 
-            if tool_calls.is_empty() {
-                // No tool calls - model is done
-                // Record success metrics with trace_id
-                AGENT_TASKS_TOTAL.with_label_values(&["success", &trace_id]).inc();
-                AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
+                if tool_calls.is_empty() {
+                    // No tool calls - model is done
+                    info!(trace_id = %trace_id, iterations, tool_calls = tool_calls_made, "Agent task completed");
+                    AGENT_TASKS_TOTAL.with_label_values(&["success", &trace_id]).inc();
+                    AGENT_ITERATIONS.with_label_values(&[&trace_id]).observe(iterations as f64);
 
-                return Ok(AgentResult {
-                    final_response: response.message.content,
-                    iterations,
-                    tool_calls_made,
-                    execution_records,
-                    trace_id,
-                    model_load_time_ms,
-                });
-            }
+                    return Ok(AgentResult {
+                        final_response: response.message.content,
+                        iterations,
+                        tool_calls_made,
+                        execution_records,
+                        trace_id,
+                        model_load_time_ms,
+                    });
+                }
 
-            for tool_call in tool_calls {
-                if tool_call.function.name == "execute_code" {
-                    tool_calls_made += 1;
-                    AGENT_TOOL_CALLS_TOTAL.with_label_values(&["execute_code", &trace_id]).inc();
+                for tool_call in tool_calls {
+                    if tool_call.function.name == "execute_code" {
+                        tool_calls_made += 1;
+                        AGENT_TOOL_CALLS_TOTAL.with_label_values(&["execute_code", &trace_id]).inc();
 
-                    // Parse arguments
-                    let args = &tool_call.function.arguments;
-                    let language = args["language"].as_str().unwrap_or("bash");
-                    let code = args["code"].as_str().unwrap_or("");
+                        // Parse arguments
+                        let args = &tool_call.function.arguments;
+                        let language = args["language"].as_str().unwrap_or("bash");
+                        let code = args["code"].as_str().unwrap_or("");
 
-                    // Validate: reject empty code
-                    if code.trim().is_empty() {
-                        println!("[AGENT] ⚠️ Rejecting empty code from LLM");
-                        messages.push(ChatMessage::tool(
-                            "Error: code parameter is empty. Please provide actual code to execute.".to_string()
-                        ));
-                        continue;
-                    }
-
-                    // Execute in VM
-                    println!("[AGENT] Executing {} code:", language);
-                    println!("┌─────────────────────────────────────────");
-                    for line in code.lines() {
-                        println!("│ {}", line);
-                    }
-                    println!("└─────────────────────────────────────────");
-                    let result = self.execute_code(language, code, &trace_id).await;
-
-                    // Format result for Ollama
-                    let tool_response = match &result {
-                        Ok(record) => {
-                            println!("[AGENT] ✅ Execution succeeded (exit code: {})", record.exit_code);
-                            execution_records.push(record.clone());
-                            format!(
-                                "Exit code: {}\nStdout:\n{}\nStderr:\n{}{}",
-                                record.exit_code,
-                                record.stdout,
-                                record.stderr,
-                                if record.timed_out {
-                                    "\n(Execution timed out)"
-                                } else {
-                                    ""
-                                }
-                            )
+                        // Validate: reject empty code
+                        if code.trim().is_empty() {
+                            warn!(trace_id = %trace_id, "Rejecting empty code from LLM");
+                            println!("[AGENT] ⚠️ Rejecting empty code from LLM");
+                            messages.push(ChatMessage::tool(
+                                "Error: code parameter is empty. Please provide actual code to execute.".to_string()
+                            ));
+                            continue;
                         }
-                        Err(e) => {
-                            println!("[AGENT] ❌ Execution failed: {}", e);
-                            format!("Error: {}", e)
-                        }
-                    };
 
-                    // Add tool response to conversation
-                    messages.push(ChatMessage::tool(tool_response));
+                        // Execute in VM with tracing span
+                        let exec_span = info_span!(
+                            "code_execution",
+                            trace_id = %trace_id,
+                            language = %language,
+                            code_len = code.len(),
+                            otel.name = "code_execution"
+                        );
+
+                        info!(trace_id = %trace_id, language, code_len = code.len(), "Executing code");
+                        println!("[AGENT] Executing {} code:", language);
+                        println!("┌─────────────────────────────────────────");
+                        for line in code.lines() {
+                            println!("│ {}", line);
+                        }
+                        println!("└─────────────────────────────────────────");
+
+                        let result = self.execute_code(language, code, &trace_id)
+                            .instrument(exec_span)
+                            .await;
+
+                        // Format result for Ollama
+                        let tool_response = match &result {
+                            Ok(record) => {
+                                info!(
+                                    trace_id = %trace_id,
+                                    exit_code = record.exit_code,
+                                    duration_ms = record.duration_ms,
+                                    "Code execution succeeded"
+                                );
+                                println!("[AGENT] ✅ Execution succeeded (exit code: {})", record.exit_code);
+                                execution_records.push(record.clone());
+                                format!(
+                                    "Exit code: {}\nStdout:\n{}\nStderr:\n{}{}",
+                                    record.exit_code,
+                                    record.stdout,
+                                    record.stderr,
+                                    if record.timed_out {
+                                        "\n(Execution timed out)"
+                                    } else {
+                                        ""
+                                    }
+                                )
+                            }
+                            Err(e) => {
+                                warn!(trace_id = %trace_id, error = %e, "Code execution failed");
+                                println!("[AGENT] ❌ Execution failed: {}", e);
+                                format!("Error: {}", e)
+                            }
+                        };
+
+                        // Add tool response to conversation
+                        messages.push(ChatMessage::tool(tool_response));
+                    }
                 }
             }
         }
+        .instrument(root_span)
+        .await
     }
 
     /// Execute code in an isolated VM with streaming output
