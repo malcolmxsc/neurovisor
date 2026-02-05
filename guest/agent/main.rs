@@ -62,13 +62,47 @@ impl ExecutionService for ExecutionServer {
 
         // Build command based on language
         // Note: Alpine uses BusyBox, so we use /bin/sh for shell commands
-        let (program, args): (&str, Vec<&str>) = match req.language.as_str() {
-            "python" | "python3" => ("python3", vec!["-c", &req.code]),
-            "bash" | "sh" | "shell" => ("/bin/sh", vec!["-c", &req.code]),
-            "javascript" | "node" => ("node", vec!["-e", &req.code]),
+        // For compiled languages (Go, Rust), we write to temp file first
+        let (program, args, temp_file): (String, Vec<String>, Option<String>) = match req.language.as_str() {
+            "python" | "python3" => ("python3".to_string(), vec!["-c".to_string(), req.code.clone()], None),
+            "bash" | "sh" | "shell" => ("/bin/sh".to_string(), vec!["-c".to_string(), req.code.clone()], None),
+            "javascript" | "node" => ("node".to_string(), vec!["-e".to_string(), req.code.clone()], None),
+            "go" | "golang" => {
+                // Write Go code to temp file and run
+                let temp_path = format!("/tmp/exec_{}.go", std::process::id());
+                if let Err(e) = std::fs::write(&temp_path, &req.code) {
+                    return Err(Status::internal(format!("Failed to write Go file: {}", e)));
+                }
+                ("go".to_string(), vec!["run".to_string(), temp_path.clone()], Some(temp_path))
+            }
+            "rust" | "rs" => {
+                // Write Rust code to temp file, compile and run
+                let temp_src = format!("/tmp/exec_{}.rs", std::process::id());
+                let temp_bin = format!("/tmp/exec_{}", std::process::id());
+                if let Err(e) = std::fs::write(&temp_src, &req.code) {
+                    return Err(Status::internal(format!("Failed to write Rust file: {}", e)));
+                }
+                // Compile first
+                let compile = std::process::Command::new("rustc")
+                    .args(["-o", &temp_bin, &temp_src])
+                    .output();
+                let _ = std::fs::remove_file(&temp_src);
+                match compile {
+                    Ok(output) if output.status.success() => {
+                        (temp_bin.clone(), vec![], Some(temp_bin))
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(Status::invalid_argument(format!("Rust compile error: {}", stderr)));
+                    }
+                    Err(e) => {
+                        return Err(Status::internal(format!("Failed to run rustc: {}", e)));
+                    }
+                }
+            }
             _ => {
                 return Err(Status::invalid_argument(format!(
-                    "Unsupported language: {}. Supported: python, bash/sh, javascript",
+                    "Unsupported language: {}. Supported: python, bash/sh, javascript, go, rust",
                     req.language
                 )));
             }
@@ -81,7 +115,7 @@ impl ExecutionService for ExecutionServer {
         });
 
         // Build command with optional environment variables
-        let mut cmd = Command::new(program);
+        let mut cmd = Command::new(&program);
         cmd.args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -94,6 +128,11 @@ impl ExecutionService for ExecutionServer {
 
         // Execute with timeout
         let result = timeout(timeout_duration, cmd.output()).await;
+
+        // Clean up temp files
+        if let Some(ref tf) = temp_file {
+            let _ = std::fs::remove_file(tf);
+        }
 
         let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -158,13 +197,47 @@ impl ExecutionService for ExecutionServer {
 
         // Build command based on language
         // Note: Alpine uses BusyBox, so we use /bin/sh for shell commands
-        let (program, args): (&str, Vec<String>) = match req.language.as_str() {
-            "python" | "python3" => ("python3", vec!["-u".to_string(), "-c".to_string(), req.code.clone()]),
-            "bash" | "sh" | "shell" => ("/bin/sh", vec!["-c".to_string(), req.code.clone()]),
-            "javascript" | "node" => ("node", vec!["-e".to_string(), req.code.clone()]),
+        // For compiled languages (Go, Rust), we compile first then stream execution
+        let (program, args, temp_file): (String, Vec<String>, Option<String>) = match req.language.as_str() {
+            "python" | "python3" => ("python3".to_string(), vec!["-u".to_string(), "-c".to_string(), req.code.clone()], None),
+            "bash" | "sh" | "shell" => ("/bin/sh".to_string(), vec!["-c".to_string(), req.code.clone()], None),
+            "javascript" | "node" => ("node".to_string(), vec!["-e".to_string(), req.code.clone()], None),
+            "go" | "golang" => {
+                // Write Go code to temp file
+                let temp_path = format!("/tmp/exec_stream_{}.go", std::process::id());
+                if let Err(e) = std::fs::write(&temp_path, &req.code) {
+                    return Err(Status::internal(format!("Failed to write Go file: {}", e)));
+                }
+                ("go".to_string(), vec!["run".to_string(), temp_path.clone()], Some(temp_path))
+            }
+            "rust" | "rs" => {
+                // Write Rust code to temp file, compile first
+                let temp_src = format!("/tmp/exec_stream_{}.rs", std::process::id());
+                let temp_bin = format!("/tmp/exec_stream_{}", std::process::id());
+                if let Err(e) = std::fs::write(&temp_src, &req.code) {
+                    return Err(Status::internal(format!("Failed to write Rust file: {}", e)));
+                }
+                // Compile synchronously before streaming
+                let compile = std::process::Command::new("rustc")
+                    .args(["-o", &temp_bin, &temp_src])
+                    .output();
+                let _ = std::fs::remove_file(&temp_src);
+                match compile {
+                    Ok(output) if output.status.success() => {
+                        (temp_bin.clone(), vec![], Some(temp_bin))
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(Status::invalid_argument(format!("Rust compile error: {}", stderr)));
+                    }
+                    Err(e) => {
+                        return Err(Status::internal(format!("Failed to run rustc: {}", e)));
+                    }
+                }
+            }
             _ => {
                 return Err(Status::invalid_argument(format!(
-                    "Unsupported language: {}. Supported: python, bash/sh, javascript",
+                    "Unsupported language: {}. Supported: python, bash/sh, javascript, go, rust",
                     req.language
                 )));
             }
@@ -181,7 +254,7 @@ impl ExecutionService for ExecutionServer {
         let (tx, rx) = tokio::sync::mpsc::channel(100);
 
         tokio::spawn(async move {
-            let mut cmd = Command::new(program);
+            let mut cmd = Command::new(&program);
             cmd.args(&args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -190,6 +263,9 @@ impl ExecutionService for ExecutionServer {
             for (key, value) in &env_vars {
                 cmd.env(key, value);
             }
+
+            // Store temp_file for cleanup at the end
+            let cleanup_file = temp_file;
 
             // Spawn the child process
             let mut child = match cmd.spawn() {
@@ -283,6 +359,11 @@ impl ExecutionService for ExecutionServer {
                         }))
                         .await;
                 }
+            }
+
+            // Clean up temp files
+            if let Some(ref tf) = cleanup_file {
+                let _ = std::fs::remove_file(tf);
             }
         });
 
