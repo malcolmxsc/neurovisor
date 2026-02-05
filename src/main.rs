@@ -238,20 +238,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await
     });
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // 7. START DASHBOARD WEB SERVER
+    // ─────────────────────────────────────────────────────────────────────────
+    let dashboard_pool = Arc::clone(&pool);
+    let dashboard_handle = tokio::spawn(async move {
+        use neurovisor::dashboard::{create_router, DashboardState};
+        let state = DashboardState { pool: dashboard_pool };
+        let app = create_router(state);
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+        println!("[INFO] ✅ DASHBOARD LISTENING ON http://0.0.0.0:8080");
+        axum::serve(listener, app).await.unwrap();
+    });
+
     println!();
     println!("╔════════════════════════════════════════════════════════════════╗");
     println!("║                    NEUROVISOR DAEMON READY                     ║");
     println!("╠════════════════════════════════════════════════════════════════╣");
-    println!("║  Gateway:  0.0.0.0:{}                                       ║", GATEWAY_PORT);
-    println!("║  Metrics:  http://0.0.0.0:{}/metrics                        ║", METRICS_PORT);
-    println!("║  VM Pool:  {} warm, {} max                                     ║", args.warm_size, args.max_size);
-    println!("║  VM Size:  {:<48}║", format!("{}", args.vm_size));
+    println!("║  Gateway:   0.0.0.0:{}                                      ║", GATEWAY_PORT);
+    println!("║  Dashboard: http://0.0.0.0:8080                              ║");
+    println!("║  Metrics:   http://0.0.0.0:{}/metrics                       ║", METRICS_PORT);
+    println!("║  VM Pool:   {} warm, {} max                                    ║", args.warm_size, args.max_size);
+    println!("║  VM Size:   {:<47}║", format!("{}", args.vm_size));
     println!("╚════════════════════════════════════════════════════════════════╝");
     println!();
     println!("[INFO] Press Ctrl+C to shutdown gracefully");
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 7. WAIT FOR SHUTDOWN SIGNAL
+    // 8. WAIT FOR SHUTDOWN SIGNAL
     // ─────────────────────────────────────────────────────────────────────────
     tokio::signal::ctrl_c().await?;
 
@@ -259,7 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("[INFO] 🛑 SHUTDOWN SIGNAL RECEIVED");
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 8. GRACEFUL SHUTDOWN
+    // 9. GRACEFUL SHUTDOWN
     // ─────────────────────────────────────────────────────────────────────────
     println!("[INFO] Shutting down VM pool...");
     pool.shutdown().await;
@@ -268,6 +282,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     grpc_handle.abort();
     replenisher.abort();
     metrics_handle.abort();
+    dashboard_handle.abort();
 
     println!("[INFO] ✅ NEUROVISOR DAEMON STOPPED");
     Ok(())

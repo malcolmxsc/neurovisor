@@ -24,5 +24,7 @@
 //! ```
 
 pub mod controller;
+pub mod sessions;
 
 pub use controller::{AgentConfig, AgentController, AgentError, AgentResult, ExecutionRecord};
+pub use sessions::{Session, SessionStore, SessionSummary};
