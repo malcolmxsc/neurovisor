@@ -27,7 +27,6 @@
 
 pub mod agent;
 pub mod cgroups;
-pub mod dashboard;
 pub mod ebpf;
 pub mod grpc;
 pub mod metrics;
