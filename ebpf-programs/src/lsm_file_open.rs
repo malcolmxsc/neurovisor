@@ -35,9 +35,15 @@ static TRACKED_PIDS: HashMap<u32, u8> = HashMap::with_max_entries(MAX_PIDS, 0);
 #[map]
 static BLOCKED_PATHS: HashMap<[u8; PATH_PREFIX_LEN], u8> = HashMap::with_max_entries(MAX_BLOCKED_PATHS, 0);
 
-/// BPF Map: Counter for blocked access attempts
+/// BPF Map: Per-path counter for blocked access attempts
+/// Key: path prefix (64 bytes), Value: count
+/// Read from userspace to export per-path metrics
 #[map]
-static BLOCKED_COUNT: HashMap<u32, u64> = HashMap::with_max_entries(1, 0);
+static BLOCKED_PATH_COUNTS: HashMap<[u8; PATH_PREFIX_LEN], u64> = HashMap::with_max_entries(MAX_BLOCKED_PATHS, 0);
+
+/// BPF Map: Total blocked count (for quick summary)
+#[map]
+static BLOCKED_TOTAL: HashMap<u32, u64> = HashMap::with_max_entries(1, 0);
 
 /// LSM hook for file_open
 /// Returns 0 to allow, negative errno to deny
@@ -67,12 +73,16 @@ fn try_file_open_check(ctx: &LsmContext) -> Result<i32, i64> {
     // In production, this would use bpf_d_path or similar helpers
     let path = get_file_path(ctx)?;
 
-    // Check if path matches any blocked prefix
-    if is_path_blocked(&path) {
-        // Increment blocked counter
+    // Check if path matches any blocked prefix and get which one
+    if let Some(blocked_path) = get_blocked_match(&path) {
+        // Increment per-path counter
+        let path_count = unsafe { BLOCKED_PATH_COUNTS.get(&blocked_path).copied().unwrap_or(0) };
+        let _ = unsafe { BLOCKED_PATH_COUNTS.insert(&blocked_path, &(path_count + 1), 0) };
+
+        // Increment total counter
         let key: u32 = 0;
-        let count = unsafe { BLOCKED_COUNT.get(&key).copied().unwrap_or(0) };
-        let _ = unsafe { BLOCKED_COUNT.insert(&key, &(count + 1), 0) };
+        let total = unsafe { BLOCKED_TOTAL.get(&key).copied().unwrap_or(0) };
+        let _ = unsafe { BLOCKED_TOTAL.insert(&key, &(total + 1), 0) };
 
         // Return -EACCES (Permission denied)
         return Ok(-13);
@@ -94,18 +104,18 @@ fn get_file_path(_ctx: &LsmContext) -> Result<[u8; PATH_PREFIX_LEN], i64> {
     Ok([0u8; PATH_PREFIX_LEN])
 }
 
-/// Check if a path matches any blocked prefix
-fn is_path_blocked(path: &[u8; PATH_PREFIX_LEN]) -> bool {
+/// Check if a path matches any blocked prefix and return the matching blocked path
+fn get_blocked_match(path: &[u8; PATH_PREFIX_LEN]) -> Option<[u8; PATH_PREFIX_LEN]> {
     // Check exact match in blocked paths
     if unsafe { BLOCKED_PATHS.get(path).is_some() } {
-        return true;
+        return Some(*path);
     }
 
-    // For prefix matching, we'd need to iterate
-    // eBPF has limited loop support, so we check common prefixes
-    // This is a simplified version
+    // For prefix matching, we'd need to iterate through BLOCKED_PATHS
+    // eBPF has limited loop support, so this is a simplified version
+    // In production, we'd use a more sophisticated matching algorithm
 
-    false
+    None
 }
 
 #[panic_handler]

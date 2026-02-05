@@ -221,21 +221,68 @@ impl LsmManager {
         Ok(())
     }
 
-    /// Get the count of blocked access attempts
+    /// Get the total count of blocked access attempts
     #[cfg(feature = "ebpf")]
     pub async fn blocked_count(&self) -> u64 {
         let bpf = self.bpf.read().await;
-        if let Ok(counts) = HashMap::<_, u32, u64>::try_from(
-            bpf.map("BLOCKED_COUNT").unwrap(),
-        ) {
-            counts.get(&0, 0).unwrap_or(0)
-        } else {
-            0
+        if let Some(map) = bpf.map("BLOCKED_TOTAL") {
+            if let Ok(counts) = HashMap::<_, u32, u64>::try_from(map) {
+                return counts.get(&0, 0).unwrap_or(0);
+            }
         }
+        0
     }
 
     #[cfg(not(feature = "ebpf"))]
     pub async fn blocked_count(&self) -> u64 {
         0
     }
+
+    /// Collect per-path blocked counts and export to Prometheus metrics
+    #[cfg(feature = "ebpf")]
+    pub async fn collect_metrics(&self) -> Result<(), LsmError> {
+        use crate::ebpf::metrics::{EBPF_LSM_BLOCKED, EBPF_LSM_BLOCKED_TOTAL};
+
+        let bpf = self.bpf.read().await;
+
+        // Read per-path blocked counts
+        if let Some(map) = bpf.map("BLOCKED_PATH_COUNTS") {
+            if let Ok(path_counts) = HashMap::<_, [u8; 64], u64>::try_from(map) {
+                for item in path_counts.iter() {
+                    if let Ok((path_bytes, count)) = item {
+                        // Convert path bytes to string
+                        let path = bytes_to_path(&path_bytes);
+                        if !path.is_empty() && count > 0 {
+                            EBPF_LSM_BLOCKED
+                                .with_label_values(&[&path])
+                                .inc_by(count as f64);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Read total blocked count
+        if let Some(map) = bpf.map("BLOCKED_TOTAL") {
+            if let Ok(total_map) = HashMap::<_, u32, u64>::try_from(map) {
+                if let Ok(total) = total_map.get(&0, 0) {
+                    EBPF_LSM_BLOCKED_TOTAL.set(total as f64);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "ebpf"))]
+    pub async fn collect_metrics(&self) -> Result<(), LsmError> {
+        Ok(())
+    }
+}
+
+/// Convert path bytes to a string, trimming null bytes
+#[cfg(feature = "ebpf")]
+fn bytes_to_path(bytes: &[u8; 64]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(64);
+    String::from_utf8_lossy(&bytes[..end]).to_string()
 }

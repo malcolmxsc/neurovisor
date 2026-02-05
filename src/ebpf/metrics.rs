@@ -38,6 +38,28 @@ lazy_static! {
     ).expect("failed to register EBPF_PROCESS_EXEC metric");
 
     // ─────────────────────────────────────────────────────────────────────────────
+    // LSM Security Metrics
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Blocked file access attempts per path.
+    ///
+    /// Incremented when LSM denies access to a blocked path.
+    ///
+    /// Labels:
+    /// - path: The blocked path prefix (e.g., "/etc/shadow", "/proc/kcore")
+    pub static ref EBPF_LSM_BLOCKED: CounterVec = register_counter_vec!(
+        "neurovisor_ebpf_lsm_blocked_total",
+        "File access attempts blocked by eBPF LSM per path",
+        &["path"]
+    ).expect("failed to register EBPF_LSM_BLOCKED metric");
+
+    /// Total blocked access attempts (all paths combined).
+    pub static ref EBPF_LSM_BLOCKED_TOTAL: Gauge = register_gauge!(
+        "neurovisor_ebpf_lsm_blocked_total_count",
+        "Total file access attempts blocked by eBPF LSM"
+    ).expect("failed to register EBPF_LSM_BLOCKED_TOTAL metric");
+
+    // ─────────────────────────────────────────────────────────────────────────────
     // eBPF System Metrics
     // ─────────────────────────────────────────────────────────────────────────────
 
